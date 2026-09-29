@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <!-- 顶栏与页面同色（bg_page），视觉上连成一片；不放标题，只留右侧操作图标。
+             高度由 applyImmersiveStatusBar 运行时精确设定（操作区 + 状态栏），
+             这里写死 56dp 只是给布局预览用 -->
+        <com.google.android.material.appbar.MaterialToolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:background="@color/bg_page"
+            android:theme="@style/ThemeOverlay.MdNotes.Toolbar"
+            app:titleTextAppearance="@style/TextAppearance.MdNotes.ToolbarTitle"
+            app:titleTextColor="@color/text_main" />
+
+        <!-- MIUI 式胶囊搜索栏：浅暖灰底、全圆角、无边框、带放大镜 -->
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.MaterialComponents.TextInputLayout.FilledBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
+            android:layout_marginTop="4dp"
+            android:hint="@string/hint_search"
+            app:boxBackgroundColor="@color/search_bg"
+            app:boxCornerRadiusBottomEnd="24dp"
+            app:boxCornerRadiusBottomStart="24dp"
+            app:boxCornerRadiusTopEnd="24dp"
+            app:boxCornerRadiusTopStart="24dp"
+            app:boxStrokeWidth="0dp"
+            app:boxStrokeWidthFocused="0dp"
+            app:startIconDrawable="@drawable/ic_search"
+            app:startIconTint="@color/text_sub">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/searchInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:imeOptions="actionSearch"
+                android:inputType="text"
+                android:singleLine="true"
+                android:textColor="@color/text_main"
+                android:textSize="14sp" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <!-- 双列瀑布流卡片列表：左右 padding 与搜索框对齐（16dp），
+                 卡片自身再留 4dp 间隙，列间距才不会一边宽一边窄 -->
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recycler"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="88dp" />
+
+            <TextView
+                android:id="@+id/emptyTip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:text="@string/empty_tip"
+                android:textColor="@color/text_sub"
+                android:textSize="14sp"
+                android:visibility="gone" />
+        </FrameLayout>
+    </LinearLayout>
+
+    <!-- MIUI 橙的新建便签按钮 -->
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fabAdd"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="16dp"
+        android:contentDescription="@string/title_edit"
+        app:backgroundTint="@color/brand_bar"
+        app:borderWidth="0dp"
+        app:rippleColor="#33FFFFFF"
+        app:srcCompat="@drawable/ic_add"
+        app:tint="@android:color/white" />
+
+</FrameLayout>

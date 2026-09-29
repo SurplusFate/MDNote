@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- 夜间覆盖：状态栏跟深色顶栏同色，状态栏图标换浅色 -->
+    <!-- 注意：同名 style 会整体替换日间版本，所以这里要完整重定义 -->
+    <style name="Theme.MdNotes" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/brand</item>
+        <item name="colorPrimaryVariant">@color/brand_dark</item>
+        <item name="colorOnPrimary">@android:color/white</item>
+        <item name="colorSecondary">@color/brand</item>
+        <item name="colorSecondaryVariant">@color/brand_dark</item>
+        <item name="colorOnSecondary">@android:color/white</item>
+        <item name="android:windowBackground">@color/bg_page</item>
+        <!-- 与日间一致：状态栏/顶栏/页面同为 bg_page 近黑，连成一片 -->
+        <item name="android:statusBarColor">@color/bg_page</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
+    </style>
+</resources>

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <!-- 顶栏与页面同色；不放"编辑"标题，只留返回箭头 + 右侧操作图标。
+             高度由 applyImmersiveStatusBar 运行时精确设定 -->
+        <com.google.android.material.appbar.MaterialToolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:background="@color/bg_page"
+            android:theme="@style/ThemeOverlay.MdNotes.Toolbar"
+            app:titleTextColor="@color/text_main" />
+
+        <!-- 调试浮层：默认 GONE，由「设置 → 编辑 → 调试日志」开关控制。
+             放在工具栏正下方（文档流内）—— 顶部远离键盘、也不与状态栏重叠，
+             键盘弹起时纸面被垫高、浮层位置纹丝不动，任何时刻都完整可见。 -->
+        <TextView
+            android:id="@+id/debugOverlay"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#E6202020"
+            android:padding="6dp"
+            android:textColor="#FF37D67A"
+            android:textSize="10sp"
+            android:fontFamily="monospace"
+            android:visibility="gone" />
+
+
+        <!-- Typora 式块级实时渲染编辑器：块切分/编辑循环/渲染全在 assets/editor/ 里。
+             纸面（MIUI 一张纸）由 editor.css 绘制，这里只留透明画布。 -->
+        <WebView
+            android:id="@+id/editorWeb"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:background="@color/bg_page" />
+
+        <!-- v1.43：原生键盘辅助栏（Bear 风格灰条 + 收起键盘键）已整体移除。
+             格式工具由 WebView 内的 Vditor 工具栏负责（随键盘显隐、贴键盘上沿），
+             收起键盘交给系统返回手势——避免两条样式迥异的工具栏叠在键盘上面。 -->
+    </LinearLayout>
+</FrameLayout>

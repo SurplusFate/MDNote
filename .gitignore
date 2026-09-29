@@ -1,0 +1,15 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+app/build/
+app/release/
+# 本地构建日志（非源码，不入仓）
+build_v*.log
+*.log

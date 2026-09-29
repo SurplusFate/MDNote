@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <!-- 全部用图标：撤回/前进/字号/删除，避免文字按钮和图标混排导致的错位。
+         预览切换已移除：点击正文直接编辑、键盘收起自动回预览（Typora 式） -->
+    <!-- 眼睛：实时渲染 ⇄ 全文源码 视图切换（v1.35.16） -->
+    <item
+        android:id="@+id/action_toggle_render"
+        android:icon="@drawable/ic_eye"
+        android:title="@string/action_toggle_render"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_undo"
+        android:icon="@drawable/ic_undo"
+        android:title="@string/action_undo"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_redo"
+        android:icon="@drawable/ic_redo"
+        android:title="@string/action_redo"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_font"
+        android:icon="@drawable/ic_font"
+        android:title="@string/action_font"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_delete"
+        android:icon="@drawable/ic_delete"
+        android:title="@string/action_delete"
+        app:showAsAction="always" />
+</menu>

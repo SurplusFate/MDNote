@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 未启用工具：点 + 加进工具栏；文字与已启用行的标签对齐（56dp） -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="56dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingEnd="8dp"
+    android:background="?attr/selectableItemBackground">
+
+    <TextView
+        android:id="@+id/label"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="56dp"
+        android:layout_weight="1"
+        android:textColor="@color/text_sub"
+        android:textSize="16sp" />
+
+    <ImageButton
+        android:id="@+id/btnEdit"
+        style="?attr/borderlessButtonStyle"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:contentDescription="编辑"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_edit"
+        android:visibility="gone" />
+
+    <ImageButton
+        android:id="@+id/btnAdd"
+        style="?attr/borderlessButtonStyle"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:contentDescription="加入工具栏"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_add" />
+</LinearLayout>

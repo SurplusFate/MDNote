@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ========== 小米便签风格配色：暖白纸面 + MIUI 橙 ========== -->
+
+    <!-- 品牌橙：FAB、选中描边、强调按钮 -->
+    <color name="brand">#FF6A00</color>
+    <color name="brand_dark">#E55F00</color>
+    <color name="brand_light">#FFF0E3</color>
+
+    <!-- 大面积底色（FAB / 保存按钮）：上面压白字 -->
+    <color name="brand_bar">#FF6A00</color>
+
+    <!-- 页面暖米白 + 纯白顶栏 -->
+    <color name="bg_page">#F7F4EF</color>
+    <color name="bg_bar">#FFFFFF</color>
+
+    <!-- 搜索胶囊的浅暖灰底 -->
+    <color name="search_bg">#EFECE6</color>
+
+    <!-- 设置页分组卡片底色：日间纯白，夜间比页面浅一档 -->
+    <color name="card_bg">#FFFFFF</color>
+
+    <!-- 表格/引用/分割线边框：浅色下用中性灰，深色下由 values-night 提供深一档的灰 -->
+    <color name="edit_table_border">#D0D0D0</color>
+
+    <!-- 顶栏图标 / 菜单文字：白底上用近黑 -->
+    <color name="bar_control">#FF1C1C1E</color>
+
+    <!-- 便签卡片描边：浅色下几乎看不见，只为深色下把卡片轮廓托出来 -->
+    <color name="card_stroke">#12000000</color>
+
+    <color name="text_main">#FF1C1C1E</color>
+    <color name="text_sub">#FF8E8E93</color>
+    <color name="text_hint">#FFB3B3B8</color>
+
+    <color name="ic_launcher_background">#FF6A00</color>
+
+    <!-- ========== 便签柔和底色（卡片按 id 稳定轮换，明亮温暖） ========== -->
+    <color name="note_plain">#FFFFFF</color>
+    <color name="note_cream">#FFF6DC</color>
+    <color name="note_blue">#E4F1FB</color>
+    <color name="note_green">#E8F5EA</color>
+    <color name="note_pink">#FCEEF0</color>
+    <color name="note_lilac">#F0EDF9</color>
+</resources>

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ========== 深色模式：暖白换深灰，橙色提亮一档 ========== -->
+
+    <color name="text_main">#F2F2F2</color>
+    <color name="text_sub">#99EBEBEB</color>
+    <color name="text_hint">#66EBEBEB</color>
+
+    <!-- 品牌色提亮：深色底上链接/描边才不发闷 -->
+    <color name="brand">#FFA36731</color>
+    <color name="brand_dark">#FF7A4A1F</color>
+    <color name="brand_light">#3D2A18</color>
+
+    <!-- FAB / 保存按钮在夜间用压暗的橙，不刺眼 -->
+    <color name="brand_bar">#C25E10</color>
+
+    <!-- 页面与顶栏：近黑分层 -->
+    <color name="bg_page">#FF111111</color>
+    <color name="bg_bar">#FF1D1D1F</color>
+
+    <color name="search_bg">#FF2A2A2C</color>
+    <color name="card_bg">#FF1D1D1F</color>
+
+    <!-- 表格/引用/分割线边框：深底上要与深色页面拉开对比，用比页面浅一档的灰 -->
+    <color name="edit_table_border">#3A3A3C</color>
+
+    <!-- 顶栏图标 / 菜单文字：深底上用近白 -->
+    <color name="bar_control">#F2F2F2</color>
+
+    <!-- 卡片和背景都是深色，靠这道细描边把轮廓分开 -->
+    <color name="card_stroke">#1FFFFFFF</color>
+
+    <!-- 便签柔和底色的夜间版：低饱和深色，一眼能区分颜色又不晃眼 -->
+    <color name="note_plain">#FF242426</color>
+    <color name="note_cream">#FF3B3524</color>
+    <color name="note_blue">#FF22313D</color>
+    <color name="note_green">#FF243628</color>
+    <color name="note_pink">#FF3D2C2E</color>
+    <color name="note_lilac">#FF2D2B3A</color>
+</resources>

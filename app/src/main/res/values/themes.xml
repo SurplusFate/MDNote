@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- 小米便签风：暖白纸面，状态栏与白色顶栏同色，深色图标 -->
+    <style name="Theme.MdNotes" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/brand</item>
+        <item name="colorPrimaryVariant">@color/brand_dark</item>
+        <item name="colorOnPrimary">@android:color/white</item>
+        <item name="colorSecondary">@color/brand</item>
+        <item name="colorSecondaryVariant">@color/brand_dark</item>
+        <item name="colorOnSecondary">@android:color/white</item>
+        <item name="android:windowBackground">@color/bg_page</item>
+        <!-- 状态栏与顶栏、页面同色（bg_page 暖白），三者连成一片无缝隙；
+             此前用 bg_bar 纯白，与暖白顶栏间留了一条细微色差接缝 -->
+        <item name="android:statusBarColor">@color/bg_page</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
+    </style>
+
+    <!-- 顶栏标题：像 MIUI 一样用 20sp 粗体大标题，黑色 -->
+    <style name="TextAppearance.MdNotes.ToolbarTitle" parent="TextAppearance.MaterialComponents.Headline6">
+        <item name="android:textSize">20sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/text_main</item>
+        <item name="android:letterSpacing">0.01</item>
+    </style>
+
+    <!-- 顶栏白底黑字（夜间深底白字）：返回箭头、菜单图标统一走 bar_control -->
+    <style name="ThemeOverlay.MdNotes.Toolbar" parent="ThemeOverlay.MaterialComponents.ActionBar">
+        <item name="colorControlNormal">@color/bar_control</item>
+        <item name="actionMenuTextColor">@color/bar_control</item>
+    </style>
+</resources>

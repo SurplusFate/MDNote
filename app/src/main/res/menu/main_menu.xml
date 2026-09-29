@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <!-- 全部用图标上顶栏：文字项在暖白页面上会变成突兀的白框，图标才与同步同一视觉层级 -->
+    <item
+        android:id="@+id/action_sync"
+        android:icon="@drawable/ic_sync"
+        android:title="@string/action_sync"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_settings"
+        android:icon="@drawable/ic_settings"
+        android:title="@string/action_settings"
+        app:showAsAction="always" />
+</menu>
