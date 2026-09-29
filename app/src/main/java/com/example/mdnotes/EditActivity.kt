@@ -17,7 +17,6 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
-import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.webkit.WebResourceRequest
@@ -85,8 +84,6 @@ class EditActivity : AppCompatActivity() {
         /** 键盘收起后多久确认自动退回预览：IME 动画期间 insets 逐帧回落，防误判 */
         private const val IME_SETTLE_MS = 250L
         private const val IME_POLL_MS = 300L
-        /** v1.88：两次 Tab 派发之间的最小间隔 —— 给 Vditor 消化上一次嵌套重渲染的时间 */
-        private const val TAB_GAP_MS = 160L
         /** 进入编辑态后的宽限期：键盘弹出有时延，宽限内不判"键盘收起" */
         private const val EDIT_GRACE_MS = 600L
         /**
@@ -366,64 +363,9 @@ class EditActivity : AppCompatActivity() {
                 "openUrl" -> onJsOpenUrl(ev.optString("a"))
                 "viewImage" -> onJsViewImage(ev.optString("a"))
                 "pickImage" -> onJsPickImage()
-                "indentTab" -> onJsIndentTab()
-                "outdentTab" -> onJsOutdentTab()
             }
         }
     }
-
-    /**
-     * v1.82 缩进/减缩进：JS 把意图入队（页面内无法合成「可信」按键事件，Chromium 只把
-     * 原生按键送进编辑器键处理管线），这里向 WebView 派发可信 Tab / Shift+Tab 事件，
-     * 由 Vditor IR 原生嵌套逻辑处理（列表/任务/有序能正确嵌套且保留、光标不跳文首）。
-     * 引用/段落原生 Tab 无操作，属 IR（Typora）模型限制，不破坏光标。
-     * 工具栏按钮的 mousedown 已 preventDefault，IR 仍聚焦，事件会落到当前列表项上。
-     */
-    private fun dispatchTabToEditor(shift: Boolean) {
-        val web = binding.editorWeb
-        // v1.88：仅在 WebView 确实没焦点时才申请焦点。旧版无条件 requestFocus() 会
-        // 触发软键盘弹出/收起与布局剧变（真机日志可见 IME 反复 true/false），键盘动画
-        // 期间 Vditor 正在处理 Tab 易导致结构错乱与光标异常；编辑中本来就已聚焦，无需再抢。
-        if (!web.hasFocus()) web.requestFocus()
-        val meta = if (shift) KeyEvent.META_SHIFT_ON else 0
-        val now = SystemClock.uptimeMillis()
-        web.dispatchKeyEvent(
-            KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_TAB, 0, meta)
-        )
-        web.dispatchKeyEvent(
-            KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_TAB, 0, meta)
-        )
-    }
-
-    /**
-     * v1.88：Tab 派发排队，两次之间至少隔 TAB_GAP_MS。
-     * 旧版 drainJsEvents 是把队列里的 indentTab 在**同一轮 for 循环里连续派发**——
-     * 用户连点 3 下就会在同一毫秒收到 3 个 Tab，Vditor 还在处理上一次的重渲染就被下一次打断，
-     * 真机上表现为结构错乱（待办框异常增多/渲染卡顿）。现在改成串行排队、给足消化时间；
-     * 堆积上限 ±3，避免连点十几下后 Tab 还在后台持续乱飞。
-     */
-    private val tabHandler = Handler(Looper.getMainLooper())
-    private var tabPending = 0          // >0 待缩进次数，<0 待减缩进次数
-    private var tabDraining = false
-
-    private fun requestTab(shift: Boolean) {
-        tabPending += if (shift) -1 else 1
-        if (tabPending > 3) tabPending = 3
-        if (tabPending < -3) tabPending = -3
-        if (!tabDraining) drainTabQueue()
-    }
-
-    private fun drainTabQueue() {
-        if (tabPending == 0) { tabDraining = false; return }
-        tabDraining = true
-        val shift = tabPending < 0
-        dispatchTabToEditor(shift)
-        tabPending += if (shift) 1 else -1
-        tabHandler.postDelayed({ drainTabQueue() }, TAB_GAP_MS)
-    }
-
-    private fun onJsIndentTab() = requestTab(false)
-    private fun onJsOutdentTab() = requestTab(true)
 
     // ---------- 生命周期 ----------
 

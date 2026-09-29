@@ -767,7 +767,7 @@
      * 重渲染后 textContent 长度不变 → 光标在 textContent 中的全局偏移零校正即可还原。
      * 因此彻底抛弃 v1.92 的 line+inner 双坐标系、countOwnMarkers 猜行号、li 遍历还原、
      * 文本锚定兜底还原——那些都是绕开官方机制自己造的脆弱换算。
-     * 文本锚定（liOwnText）只保留用于「定位要改的源码行」这一件事（见 outdentSubtree）。
+     * 文本锚定（liOwnText）只保留用于「定位要改的源码行」这一件事（见 transformList）。
      */
     /** 光标在 ir.element 整体 textContent 中的全局字符偏移（单坐标系）。取不到返回 null。 */
     /**
@@ -890,44 +890,46 @@
         } catch (e) { return null; }
     }
 
-    /**
-     * v1.86（v1.94 简化）：加缩进用 Vditor 原生 Tab（真机实测源码/结构全对），
-     * 仅修其唯一缺陷——嵌套任务列表时 checkbox 渲染成字面 '[ ]'。做法：Tab 派发前
-     * 记录光标的 li 相对坐标（caretLiPos，见上方 v1.94 注释）；Tab 生效且源码含任务
-     * 标记时 setValue 全量重渲染修复 checkbox，再按 li 相对坐标还原光标（Tab 只平移
-     * 结构、不改 li 自身文字）。无序/有序无渲染问题则不刷新。
-     * 1.84/1.85 的源码级缩进整体移除；v1.92 的 line+inner 双坐标系于 v1.93 移除。
-     */
+    var indentDiag = '';   // 最近一次列表缩进/减缩进的结果（经 stat 回传 Kotlin，便于真机取证）
+    var indentOps = { en: 0, ok: 0, er: 0 };   // 列表缩进/减缩进真实计数（面板不再恒为 0）
 
-    /** 任务列表渲染是否真的坏了：源码里的任务项数 > DOM 里的 checkbox 数，说明有项的
-     *  '[ ]' 还以字面文本显示（正是 1.83 反馈的「缩进一次后 checkbox 渲染异常」）。
-     *  渲染已正常的场景返回 false → 不做 setValue，零闪烁、光标保持 Vditor 原生位置。 */
-    function taskRenderBroken(src) {
-        var lines = String(src).split('\n'), n = 0;
-        for (var i = 0; i < lines.length; i++) {
-            // 只统计「有内容」的任务项：纯空项 '- [ ]' 在 IR 里本就不渲染 checkbox
-            // （不是渲染异常），算进去会让含空项的文档每次 Tab 都判成坏了、白白全量刷新。
-            if (/^\s*[-*+]\s+\[[ xX]\]\s+\S/.test(lines[i])) n++;
+    /**
+     * Sprint 2：列表加/减缩进统一走 ListStructureTransformer（纯源码变换，不依赖 DOM 猜测）。
+     * 流程：记 li 相对坐标 → 定位源码行 → transformer 计算新源码 → setValue 受控重渲染
+     * → 膨胀守卫 → 按 li 相对坐标还原光标。indent/outdent 不再区分「原生 Tab / 源码级」两套路径
+     * （原生 Tab 依赖 Kotlin 派发可信按键、且有 60/140ms 轮询时序风险；源码变换确定性、可单测）。
+     */
+    function transformList(op) {
+        if (!vd || !ready) return;
+        var p = caretLiPos();
+        if (!p) { indentDiag = op + ':nopos'; indentOps.er++; return; }
+        var src = getSource();
+        if (src == null) return;
+        var lines = src.split('\n');
+        var MARK = /^\s*(?:[-*+]\s+(?:\[[ xX]\]\s?)?|\d+\.\s)/;
+        var target = findSourceLineByLi(p.text, p.idx, lines, MARK);
+        if (target < 0) { indentDiag = op + ':notfound'; indentOps.er++; return; }
+        var res = (op === 'indent')
+            ? window.ListTransformer.indent(src, target)
+            : window.ListTransformer.outdent(src, target);
+        if (!res.changed) { indentDiag = op + ':noop'; return; }
+        var l0 = lines.length;
+        safe(function () { vd.setValue(res.src, false); });
+        var l1 = getSource().split('\n').length;
+        if (l1 > l0 + 2) {                       // 膨胀守卫：异常立即回滚，绝不把坏内容留在文档
+            safe(function () { vd.setValue(src, false); });
+            indentDiag = 'ROLLBACK ' + l0 + '->' + l1; indentOps.er++; return;
         }
-        if (!n) return false;
-        var boxes = vd.vditor.ir.element.querySelectorAll('input[type=checkbox]').length;
-        return boxes < n;
+        indentDiag = op + ' src rows=' + (l1 - l0);
+        indentOps.ok++;
+        restoreLiPos(p);                          // 结构平移下 li 相对坐标语义稳定
     }
 
-    var tabRefreshTimer = null;
-    var indentDiag = '';   // v1.89：最近一次缩进刷新的结果（经 stat 回传 Kotlin，便于真机取证）
-    var indentOps = { en: 0, ok: 0, er: 0 };   // v1.89：缩进/减缩进真实计数（面板不再恒为 0）
-
     /**
-     * v1.90：列表减缩进的源码级实现（v1.89 只覆盖任务列表，v1.90 扩到全部列表）。
-     * 不再派发 Shift+Tab——真机+headless 双重复现：Vditor 4.0 原生 Shift+Tab 对
-     * 「带 ≥2 层后代子树的列表项」减缩进时，会把后代子树复制一份（4 行文档变 5 行：
-     * 最深后代被复制到上一层，无序/有序/任务三种列表全部中招，与光标位置无关；
-     * 浅树、加缩进 Tab 均正常，Vditor 自身 bug）。
-     * 做法：直接改源码——当前行及其整个子树（缩进更深的连续行）统一左移 cut 空格
-     * （cut 按当前行 marker 取步长：有序 3、无序/任务 2），各层相对缩进不变 →
-     * Lute 解析出的结构与减缩进前完全同构，物理上不可能产生复制；
-     * 再 setValue 全量重渲染（checkbox 天然正确）并按 pos 恢复光标。
+     * Sprint 2：加/减缩进统一入口见 transformList()（上方）。减缩进不再自己改源码，
+     * 改由 ListStructureTransformer.outdent 计算（基于源码行变换，确定性、可单测，
+     * 不再依赖 Vditor 原生 Shift+Tab——后者对深层子树有复制 bug）。
+     * 以下 liOwnText / lineCoreText / findSourceLineByLi 仅供光标 li 相对坐标（caretLiPos / restoreLiPos）使用。
      */
     /** v1.92：光标 li 的自有文本指纹——摘掉后代 li、去全部空白。
      *  caretSourcePos 的「li 索引→源码行号」累计在混合文档（无序+有序懒延续+任务）
@@ -962,119 +964,7 @@
         return -1;
     }
 
-    /** v1.90：列表减缩进源码级实现（绕开 Vditor 4.0 原生 Shift+Tab 对深层子树的复制 bug）。
-     *  liPos：光标的 li 相对坐标 {text, idx, off}（v1.94）——text/idx 定位要平移的源码行，
-     *  setValue 重渲染后按同一坐标还原光标（结构平移不改 li 自身文字，坐标语义稳定）。 */
-    function outdentSubtree(liPos) {
-        if (!vd || !ready) return false;
-        var src = getSource();
-        if (src == null) return false;
-        var lines = src.split('\n');
-        var MARK = /^\s*(?:[-*+]\s+(?:\[[ xX]\]\s?)?|\d+\.\s)/;
-        // 文本锚定定位：光标 li 的文字指纹 + 同名序号 → 源码里精确行（无就近兜底）。
-        var target = findSourceLineByLi(liPos.text, liPos.idx, lines, MARK);
-        if (target < 0) { indentDiag = 'outdent:notfound'; return false; }
-        var line = lines[target];
-        var m = line.match(/^(\s*)([-*+]\s+(?:\[[ xX]\]\s?)?|\d+\.\s+)/);
-        if (!m) return false;                              // 不是列表行：不动
-        var cur = m[1].length;
-        if (cur === 0) { indentDiag = 'outdent:top'; return true; }   // 已是一级：无事可做
-        var cut = Math.min(/^\s*\d+\.\s/.test(line) ? 3 : 2, cur);
-        // 子树范围：从下一行起，前导缩进比当前行更深的连续行（空行跳过、跟随其后判定）
-        var end = target + 1;
-        while (end < lines.length) {
-            var l2 = lines[end];
-            if (!l2.trim()) { end++; continue; }
-            var ind2 = (l2.match(/^(\s*)/) || ['',''])[1].length;
-            if (ind2 > cur) { end++; continue; }
-            break;
-        }
-        for (var j = target; j < end; j++) {
-            var l3 = lines[j];
-            if (!l3.trim()) continue;
-            var ind3 = (l3.match(/^(\s*)/) || ['',''])[1].length;
-            lines[j] = l3.substring(Math.min(cut, ind3));
-        }
-        var out = lines.join('\n');
-        var l0 = lines.length;
-        safe(function () { vd.setValue(out, false); });
-        // 膨胀守卫（与 armTabRefresh 同款）：异常立即回滚，绝不把坏内容留在文档里
-        var l1 = getSource().split('\n').length;
-        if (l1 > l0 + 2) {
-            safe(function () { vd.setValue(src, false); });
-            indentDiag = 'ROLLBACK ' + l0 + '->' + l1;
-            indentOps.er++;
-            return false;
-        }
-        indentDiag = 'src-outdent ' + cur + '->' + (cur - cut) + ' rows=' + (end - target);
-        indentOps.ok++;
-        restoreLiPos(liPos);              // li 相对坐标还原：结构平移下 text/idx/off 语义不变
-        return true;
-    }
-
-    // v1.89：已移除 v1.88 的「同一份源码只刷一次」去重（lastFixSrc），原因见下方
-    // taskRenderBroken 判定处注释：同一份源码在不同 live DOM 状态下渲染可不同，去重
-    // 会让坏渲染留在文档里。空任务项误刷由 taskRenderBroken 内的 \s+\S 过滤解决。
-    /**
-     * Tab 派发前布防：轮询源码，生效后按需全量重渲染修复 checkbox（详见上方注释），
-     * 并把光标还原到 pos（缩进前记录的真实行内位置）。
-     * @param pos 由调用方在 caretToBlockStart 归位前记录；未传则就地取当前光标。
-     */
-    function armTabRefresh(p) {
-        if (!vd || !ready) return;
-        if (tabRefreshTimer) { clearInterval(tabRefreshTimer); tabRefreshTimer = null; }
-        var srcBefore = getSource();
-        if (srcBefore == null) return;
-        if (p == null) p = caretLiPos();
-        var tries = 0;
-        indentDiag = 'armed';   // 清空上一次的诊断，避免读到残留值误判
-        tabRefreshTimer = setInterval(function () {
-            tries++;
-            var now = getSource();
-            if (now === srcBefore) {
-                // Tab 尚未派发/未生效：继续等，超时（约 1.6s，如列表首项 Tab 本就无操作）放弃
-                if (tries > 20) {
-                    clearInterval(tabRefreshTimer); tabRefreshTimer = null;
-                    indentDiag = 'timeout';   // Tab 未改变源码（如已在最深层级）：放弃，不动光标
-                }
-                return;
-            }
-            clearInterval(tabRefreshTimer); tabRefreshTimer = null;
-            // 先让 Vditor 自己渲染一帧再判定：多数情况它已把 checkbox 渲染好，无需 setValue。
-            // 判定/写入都用「最新源码」，避免这 140ms 里用户新输入的内容被旧快照覆盖。
-            setTimeout(function () {
-                var latest = getSource();
-                // v1.89：判定只看「渲染现在坏没坏」，不再按源码去重。
-                // v1.88 曾用 latest !== lastFixSrc 去重（同一份源码只刷一次），实测错误：
-                // 同一份源码在不同 live DOM 状态下渲染结果可以不同——setValue 只修当次，
-                // 之后的 Tab/减缩进会再次把 checkbox 弄坏，而源码没变 → 去重误判"处理过"
-                // 而跳过修复，坏渲染就留在文档里（深树实测 boxes 5/6）。
-                // 空任务项误刷已由 taskRenderBroken 的 \s+\S 过滤解决，无需源码去重兜底。
-                if (taskRenderBroken(latest)) {
-                    var l0 = latest.split('\n').length;
-                    safe(function () { vd.setValue(latest, false); });   // 全量重渲染修复 checkbox
-                    var l1 = getSource().split('\n').length;
-                    // 膨胀守卫：若 setValue 让行数异常增长（真机反馈过"莫名多出几十个待办框"），
-                    // 立刻用同一份源码回滚并留下证据，绝不把异常内容留在文档里。
-                    if (l1 > l0 + 2) {
-                        safe(function () { vd.setValue(latest, false); });
-                        indentDiag = 'ROLLBACK ' + l0 + '->' + l1;
-                        indentOps.er++;
-                    } else {
-                        indentDiag = 'fix ' + l0 + '->' + l1;
-                        indentOps.ok++;
-                    }
-                } else {
-                    indentDiag = 'ok(nofix)';
-                }
-                // 无论有没有 setValue，都把光标还原到缩进前的行内位置（v1.94 li 相对坐标）：
-                // 归位块首是为了让原生 Tab 生效，但缩进完光标留在文字最前面是用户明确抱怨的行为。
-                restoreLiPos(p);
-            }, 140);
-        }, 60);
-    }
-
-    /**
+    /** v1.92：光标 li 的自有文本指纹——摘掉后代 li、去全部空白。    /**
      * v1.86：缩进用的「当前块」判定——块首归位、分支判定、段落减缩进三处共用。规则：
      *  1) 列表优先：光标在 li 内（含 li 内嵌文本/多行续写）一律返回该 li，按列表处理，
      *     不会因 li 内出现的 P/BLOCKQUOTE 等被误判成段落；
@@ -1243,26 +1133,16 @@
             sel.addRange(range);
             safe(function () { vd.deleteValue(); });
         },
-        // v1.86：恢复 1.83 的原生 Tab 缩进（真机实测源码/结构全对，仅渲染不刷新）。
-        // 列表：光标归块首 → 经 Kotlin 派发可信 Tab；派发前 armTabRefresh 布防，
-        // Tab 生效后按需全量重渲染修复任务列表 checkbox（见 armTabRefresh 注释）。
-        // 段落/引用：维持全角空格单元（见 PARA_INDENT_UNIT 说明）。
+        // Sprint 2：列表加/减缩进统一走 transformList（ListStructureTransformer 纯源码变换），
+        // 不再依赖 Vditor 原生 Tab + Kotlin 可信按键派发 + 60/140ms 轮询布防（去除时序风险）。
+        // 段落/引用缩进仍用全角空格单元（见 PARA_INDENT_UNIT 说明）。
         indentLine: function () {
-            indentOps.en++;                            // v1.89：真实调用计数（面板不再恒为 0）
+            indentOps.en++;
             var tag = this.currentBlockTag();
             if (tag === null) return;                  // 光标不在内容块内（点到列表空白/容器）：放弃
             if (tag === 'LI') {
-                // v1.88：先记下光标「真实位置」（行号 + 行内字符偏移），再归位块首。
-                // 归位是原生 Tab 嵌套的前提，但归位后光标就在文字最前面——Tab 生效后
-                // 必须按记录把它送回原处，否则用户每缩进一次光标就跳到行首（真机反馈）。
-                var p = caretLiPos();            // v1.94：li 相对坐标（结构平移下稳定）
-                this.caretToBlockStart();
-                armTabRefresh(p);                // Tab 生效后按需刷新渲染 + 还原光标
-                pushEvent('indentTab');
+                transformList('indent');              // 源码级缩进 + 受控重渲染 + 光标还原
             } else {
-                // 段落/引用：归位行首再插全角空格单元。缩进是「整行」语义（首行缩进），
-                // 不归位的话会插到光标所在位置（行尾点缩进 → 空格跑到文字后面，
-                // 减缩进又只认行首，结果加了去不掉）。
                 this.caretToBlockStart();
                 this.insertText(PARA_INDENT_UNIT);
             }
@@ -1272,18 +1152,10 @@
             var tag = this.currentBlockTag();
             if (tag === null) return;                  // 同上：放弃，不删任何字符
             if (tag === 'LI') {
-                // v1.91：列表减缩进只走源码级，永远不派发原生 Shift+Tab（其深层子树复制 bug）。
-                // v1.94：光标用 li 相对坐标（caretLiPos）——text/idx 定位源码行 + 还原光标。
-                // v1.93 的全局字符偏移被真机/headless 证伪：outdent 改变嵌套结构后
-                // textContent 序列变化，同一偏移漂到别的 li（「观后感跳到哈哈哈」）。
-                var p = caretLiPos();
-                if (!p) { indentDiag = 'outdent:nopos'; indentOps.er++; return; }
-                if (!outdentSubtree(p)) {
-                    indentOps.er++;                  // 定位失败（找不到一致行）：放弃，不动源码
-                }
-                return;
+                transformList('outdent');             // 源码级减缩进 + 受控重渲染 + 光标还原
+            } else {
+                this.outdentParagraph();              // 段落/引用去一个缩进单元
             }
-            this.outdentParagraph();           // 段落/引用去一个缩进单元
         },
         softBreak: function () { if (vd && ready) safe(function () { vd.insertValue('\n'); }); },
         /** v1.57：注入自定义工具栏配置；vd 已就绪则立即重建生效，否则仅存全局（mount 时读取） */
