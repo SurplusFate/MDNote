@@ -1,0 +1,214 @@
+/* ============================================================
+ * MdNotes 迷你 Typora —— 样式
+ * 变量默认值 = 亮色主题兜底；真实值由 Kotlin applyTheme 运行时注入
+ * （注入时自动取 values / values-night 对应色，昼夜无缝）
+ * ============================================================ */
+
+:root {
+    --bg-page: #F7F4EF;      /* colors.xml bg_page */
+    --paper: #FFFDF9;        /* colors.xml edit_paper：编辑区"一张纸" */
+    --text: #1C1C1E;         /* colors.xml text_main */
+    --text-sub: #8E8E93;     /* colors.xml text_sub */
+    --text-hint: #B3B3B8;    /* colors.xml text_hint */
+    --brand: #FF6A00;        /* colors.xml brand：MIUI 橙 */
+    --code-bg: #EFECE6;      /* colors.xml search_bg：代码/引用底色 */
+    --radius: 18px;          /* 纸面圆角，与原 TextInputLayout 一致 */
+    --font-px: 16px;         /* 正文字号（Kotlin 按 sp→px 注入） */
+    --font-family: sans-serif;
+    --mono: monospace;
+}
+
+* { box-sizing: border-box; }
+
+html {
+    background: var(--bg-page);
+    /* 滚动别把纸面拖出去 */
+    overscroll-behavior: contain;
+}
+
+body {
+    margin: 0;
+    background: transparent;
+    color: var(--text);
+    font-family: var(--font-family);
+    font-size: var(--font-px);
+    line-height: 1.75;
+    /* 去掉点击时的灰色高亮闪块 */
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* ---------- 纸面（复刻原 TextInputLayout 的 MIUI 一张纸） ---------- */
+
+.paper {
+    margin: 4px 16px 16px;
+    background: var(--paper);
+    border-radius: var(--radius);
+    padding: 14px 16px 20px;
+    min-height: calc(100vh - 24px);
+    caret-color: var(--brand);
+}
+
+/* ---------- 块 ---------- */
+
+.blk {
+    position: relative;
+    min-height: 1.2em;       /* 空块也能点得到 */
+    border-radius: 6px;
+}
+
+/* 源码态：左侧品牌橙高亮条 + 极浅橙底，一眼看出"这块在编辑" */
+.blk.editing {
+    background: rgba(255, 106, 0, 0.05);
+    box-shadow: inset 3px 0 0 var(--brand);
+    outline: none;
+    padding-left: 8px;
+    margin-left: -8px;
+    white-space: pre-wrap;   /* 源码的换行原样可见 */
+    word-break: break-word;
+    caret-color: var(--brand);
+}
+
+/* 空文档占位：点击开始书写 */
+.blk.blank:empty::before,
+.paper .blk:empty.editing::before {
+    content: attr(data-ph);
+    color: var(--text-hint);
+    pointer-events: none;
+}
+
+/* 虚拟空块（块尾回车落点）：编辑时不显示"点击开始书写"占位 ——
+   用户明明已经在书写，文末空段出这句是误导 */
+.paper .blk.virtual:empty.editing::before {
+    content: none;
+}
+
+/* ---------- Markdown 元素 ---------- */
+
+h1, h2, h3, h4, h5, h6 {
+    margin: 0.6em 0 0.35em;
+    line-height: 1.35;
+    font-weight: 700;
+}
+h1 { font-size: 1.65em; margin-top: 0.35em; }
+h2 { font-size: 1.4em; }
+h3 { font-size: 1.22em; }
+h4 { font-size: 1.1em; }
+h5 { font-size: 1em; }
+h6 { font-size: 0.95em; color: var(--text-sub); }
+.blk > *:first-child, .blk > h1:first-child, .blk > h2:first-child { margin-top: 0.15em; }
+
+p { margin: 0.45em 0; }
+
+a { color: var(--brand); text-decoration: none; }
+
+strong { font-weight: 700; }
+em { font-style: italic; }
+del { color: var(--text-sub); }
+
+ul, ol { margin: 0.4em 0; padding-left: 1.5em; }
+li { margin: 0.18em 0; }
+li::marker { color: var(--text-sub); }
+/* 逐项分块（v1.35.15）：列表/待办每项是独立块 → 相邻 <ul>/<ol> 视觉并成
+   连续列表（0.4em 上下 margin 收敛到 li 同款 0.18em 间距） */
+ul + ul, ol + ol, ul + ol, ol + ul { margin-top: -0.22em; }
+
+/* 待办：checkbox 替换原生 bullet */
+li.task { list-style: none; margin-left: -1.2em; display: flex; align-items: flex-start; }
+li.task > input[type="checkbox"] {
+    /* ★ v1.35.16：input 默认不继承字号 —— 1.05em 按 UA 的 13px 算，正文字号
+       越大勾选框显得越小、且 0.45em 的上边距也失配（真机渲染截图确认）。
+       font-size: inherit 后 em 全部跟随正文字号，勾选框与文字等大协调 */
+    font-size: inherit;
+    margin: 0.3em 0.5em 0 0;
+    width: 1.05em; height: 1.05em;
+    accent-color: var(--brand);
+    flex: none;
+}
+
+blockquote {
+    margin: 0.5em 0;
+    padding: 0.35em 0.9em;
+    border-left: 3px solid var(--brand);
+    background: rgba(127, 127, 127, 0.06);
+    border-radius: 0 8px 8px 0;
+    color: var(--text);
+}
+
+code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--code-bg);
+    border-radius: 5px;
+    padding: 0.12em 0.4em;
+}
+
+pre {
+    position: relative;
+    margin: 0.55em 0;
+    padding: 12px 14px;
+    background: var(--code-bg);
+    border-radius: 10px;
+    overflow-x: auto;        /* 长代码行横向滚，不折行 */
+}
+pre code {
+    background: none;
+    padding: 0;
+    font-size: 0.85em;
+    white-space: pre;
+    display: block;
+}
+
+/* 代码块右上角复制按钮 */
+.code-copy {
+    position: absolute;
+    top: 6px; right: 6px;
+    min-width: 34px; height: 30px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-sub);
+    font-size: 12px;
+    font-family: var(--font-family);
+    opacity: 0.55;
+}
+.code-copy:active { opacity: 1; background: rgba(127, 127, 127, 0.15); }
+
+table {
+    border-collapse: collapse;
+    margin: 0.6em 0;
+    max-width: 100%;
+    display: block;          /* 超宽表格允许横向滚动 */
+    overflow-x: auto;
+}
+th, td {
+    border: 1px solid rgba(127, 127, 127, 0.35);
+    padding: 5px 10px;
+    text-align: left;
+}
+th { background: rgba(127, 127, 127, 0.08); font-weight: 700; }
+
+img {
+    max-width: 100%;
+    border-radius: 10px;
+    display: block;
+    margin: 0.5em auto;
+}
+
+hr {
+    border: none;
+    border-top: 1px solid rgba(127, 127, 127, 0.3);
+    margin: 1em 0;
+}
+
+/* 移动端消除奇怪的外边距叠加 */
+.paper > .blk:last-child { margin-bottom: 4px; }
+
+/* ---------- 源码全文视图（v1.35.16 顶栏眼睛切换） ---------- */
+
+.srcview {
+    min-height: 60vh;
+    white-space: pre-wrap;   /* 源码换行原样可见 */
+    word-break: break-word;
+    outline: none;
+    caret-color: var(--brand);
+}

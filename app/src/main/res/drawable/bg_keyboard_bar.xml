@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 键盘辅助栏背景：纸色底 + 顶边 1dp 细分隔线（Bear 风格，与"一张纸"编辑区自然衔接） -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/bg_bar" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/search_bg" />
+            <size android:height="1dp" />
+        </shape>
+    </item>
+</layer-list>

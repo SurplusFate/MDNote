@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MD便签</string>
+    <string name="cd_hide_keyboard">收起键盘</string>
+    <string name="title_edit">编辑</string>
+    <string name="title_settings">设置</string>
+    <string name="section_edit">编辑</string>
+    <string name="section_sync">数据同步（WebDAV）</string>
+    <string name="title_toolbar_editor">编辑工具栏</string>
+    <string name="row_debug_overlay">调试日志</string>
+    <string name="row_debug_overlay_sub">编辑页底部显示键盘检测与桥接状态，普通使用无需打开</string>
+    <string name="add_custom_tool">新建自定义工具</string>
+    <string name="hint_search">搜索便签</string>
+    <string name="hint_content">用 Markdown 写点什么…</string>
+    <string name="action_sync">同步</string>
+    <string name="action_settings">设置</string>
+    <string name="action_preview">预览</string>
+    <string name="action_toggle_render">源码 / 实时渲染</string>
+    <string name="action_font">字号</string>
+    <string name="title_font_size">字号</string>
+    <string name="title_appearance">外观</string>
+    <string name="row_global_text_size">全局字号</string>
+    <string name="row_font_family">字体样式</string>
+    <string name="row_theme">背景主题</string>
+    <string name="action_edit">编辑</string>
+    <string name="action_undo">撤回</string>
+    <string name="action_redo">前进</string>
+    <string name="empty_tip">还没有便签，点右下角 + 新建</string>
+    <string name="webdav_url_hint">https://dav.jianguoyun.com/dav/notes/notes.json</string>
+    <string name="webdav_user_hint">账号（坚果云填邮箱）</string>
+    <string name="webdav_pwd_hint">应用密码</string>
+    <string name="btn_test">测试连接</string>
+    <string name="btn_save">保存</string>
+    <string name="selected">已选中</string>
+    <string name="selected_count">已选 %1$d 项</string>
+    <string name="action_select_all">全选</string>
+    <string name="action_unselect_all">取消全选</string>
+    <string name="action_delete">删除</string>
+    <string name="action_cancel">取消</string>
+    <string name="delete_confirm_title">删除便签</string>
+    <string name="delete_confirm_msg">将删除选中的 %1$d 条便签，同步后其它设备也会一并删除。</string>
+    <string name="delete_note_msg">删除这条便签？同步后其它设备也会一并删除。</string>
+    <string name="deleted_count">已删除 %1$d 条</string>
+    <string name="nothing_selected">请先选中要删除的便签</string>
+
+    <!-- ========== 工具栏编辑器（统一文案资源） ========== -->
+    <string name="toolbar_header_enabled">工具栏中（长按拖动排序）</string>
+    <string name="toolbar_header_disabled">未启用</string>
+    <string name="toolbar_header_custom">自定义工具</string>
+    <string name="custom_tool_new_title">新建自定义工具</string>
+    <string name="custom_tool_edit_title">编辑自定义工具</string>
+    <string name="dlg_save">保存</string>
+    <string name="toast_name_text_required">名称和文本都要填</string>
+    <string name="toast_deleted_custom">已删除「%s」</string>
+
+    <!-- ========== 设置页（统一文案资源） ========== -->
+    <string name="row_toolbar_desc">增删工具、拖动排序、自定义插入文本</string>
+    <string name="webdav_url_placeholder">WebDAV 文件地址</string>
+    <string name="webdav_tip">填好之后，多台手机填一样的地址就能互相同步。\n坚果云需要用「安全选项 → 第三方应用管理」里生成的应用密码，不是登录密码。</string>
+    <string name="toast_fill_three">三项都要填</string>
+    <string name="toast_saved_sync">已保存，回到列表点同步</string>
+    <string name="dlg_done">完成</string>
+    <string name="toast_test_fill">先把三项都填上再测</string>
+    <string name="testing">测试中…</string>
+    <string name="webdav_empty">连上了，远端是空的（同步一次就会创建）</string>
+    <string name="webdav_has_data">连上了，远端已有数据</string>
+    <string name="webdav_err_401">账号或密码不对（坚果云要用应用密码）</string>
+    <string name="webdav_err_404">路径不存在，去网页端把文件夹建好</string>
+    <string name="webdav_err_409">上级目录不存在，先建文件夹</string>
+    <string name="webdav_err_other">连不上：%s</string>
+
+    <!-- ========== 自定义工具对话框（统一文案资源） ========== -->
+    <string name="custom_tool_name_hint">名称（按钮上显示的字）</string>
+    <string name="custom_tool_text_hint">插入的文本（可多行）</string>
+    <string name="custom_tool_tip">文本会原样插到光标处。例如填 --- 就是分割线工具。</string>
+    <string name="follow_global_size">跟随全局字号</string>
+
+    <!-- ========== 置顶 ========== -->
+    <string name="pin">置顶</string>
+    <string name="unpin">取消置顶</string>
+    <string name="action_pin">置顶</string>
+    <string name="action_unpin">取消置顶</string>
+    <string name="pinned_count">已置顶 %1$d 条</string>
+    <string name="unpinned_count">已取消置顶 %1$d 条</string>
+</resources>

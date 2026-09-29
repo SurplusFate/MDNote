@@ -1,0 +1,21 @@
+pluginManagement {
+    repositories {
+        // 腾讯 Maven 镜像（国内速度快，已逐个实测 200）
+        maven { url 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/' }
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        maven { url 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/' }
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = 'MdNotes'
+include ':app'

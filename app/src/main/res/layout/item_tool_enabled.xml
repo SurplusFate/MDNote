@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 已启用工具：拖动把手排序，自定义工具带编辑入口，垃圾桶=移出工具栏 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="56dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="16dp"
+    android:paddingEnd="8dp"
+    android:background="?attr/selectableItemBackground">
+
+    <ImageView
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:contentDescription="拖动排序"
+        android:src="@drawable/ic_drag" />
+
+    <TextView
+        android:id="@+id/label"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_weight="1"
+        android:textColor="@color/text_main"
+        android:textSize="16sp" />
+
+    <ImageButton
+        android:id="@+id/btnEdit"
+        style="?attr/borderlessButtonStyle"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:contentDescription="编辑"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_edit"
+        android:visibility="gone" />
+
+    <ImageButton
+        android:id="@+id/btnRemove"
+        style="?attr/borderlessButtonStyle"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:contentDescription="移出工具栏"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_delete" />
+</LinearLayout>

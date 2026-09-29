@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 字号（T 形字符缩放图标） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="@color/bar_control">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M4,5h16v3h-6v11h-4V8H4V5z" />
+</vector>

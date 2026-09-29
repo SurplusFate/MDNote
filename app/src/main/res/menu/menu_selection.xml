@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <!-- 全部用图标上顶栏：文字项在暖白页面上会变成突兀的白框 -->
+    <item
+        android:id="@+id/action_select_all"
+        android:icon="@drawable/ic_select_all"
+        android:title="@string/action_select_all"
+        app:showAsAction="always" />
+
+    <item
+        android:id="@+id/action_pin"
+        android:icon="@drawable/ic_pin"
+        android:title="@string/action_pin"
+        app:showAsAction="always" />
+
+    <item
+        android:id="@+id/action_delete_selected"
+        android:icon="@drawable/ic_delete"
+        android:title="@string/action_delete"
+        app:showAsAction="always" />
+
+    <item
+        android:id="@+id/action_cancel_selection"
+        android:icon="@drawable/ic_close"
+        android:title="@string/action_cancel"
+        app:showAsAction="always" />
+
+</menu>

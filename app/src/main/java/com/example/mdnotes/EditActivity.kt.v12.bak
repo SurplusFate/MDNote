@@ -1,0 +1,544 @@
+package com.example.mdnotes
+
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
+import android.content.Context
+import android.os.Bundle
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewConfiguration
+import android.view.ViewGroup
+import android.view.animation.AccelerateInterpolator
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
+import android.widget.LinearLayout
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import com.example.mdnotes.databinding.ActivityEditBinding
+import kotlin.math.abs
+
+class EditActivity : AppCompatActivity() {
+
+    companion object {
+        const val EXTRA_ID = "id"
+
+        private const val BALL_PREFS = "floating_ball"
+        private const val KEY_BALL_CX = "ball_cx_ratio"
+        private const val KEY_BALL_CY = "ball_cy_ratio"
+        private const val BAR_WIDTH_DP = 280
+    }
+
+    private lateinit var binding: ActivityEditBinding
+    private var noteId: Long = MainActivity.NEW_NOTE
+    private var previewMode = false
+
+    private val ballPrefs by lazy { getSharedPreferences(BALL_PREFS, Context.MODE_PRIVATE) }
+    private val density by lazy { resources.displayMetrics.density }
+    private val barFullWidth by lazy { (BAR_WIDTH_DP * density).toInt() }
+
+    private val barButtons: List<View> by lazy {
+        listOf(
+            binding.btnH1, binding.btnH2, binding.btnBold, binding.btnItalic, binding.btnStrike,
+            binding.btnList, binding.btnTask, binding.btnQuote, binding.btnCode,
+            binding.btnCodeBlock, binding.btnLink
+        )
+    }
+
+    /** 工具栏目标状态：true 展开 / false 收起 */
+    private var mdBarExpanded = false
+    private var barAnimator: ValueAnimator? = null
+
+    /** true = 工具栏朝悬浮球左侧生长；false = 朝右侧生长（按剩余空间自动选） */
+    private var expandLeft = true
+
+    /** 位置是否已从记忆恢复：没恢复过就写回，会把默认位置当成记忆存下去 */
+    private var ballRestored = false
+
+    /** 用户是否手动拖过悬浮球 */
+    private var ballMoved = false
+
+    /** 悬浮球屏幕坐标锚点：面板尺寸变化时用它把球钉在原地 */
+    private var anchorCx = Float.NaN
+    private var anchorCy = Float.NaN
+
+    /** 收起动画收尾：按钮退了再整体隐藏 */
+    private val collapseFinish = Runnable {
+        if (mdBarExpanded) return@Runnable
+        val bar = binding.mdBar
+        bar.visibility = View.GONE
+        barButtons.forEach {
+            it.alpha = 1f
+            it.translationX = 0f
+        }
+        val lp = bar.layoutParams
+        lp.width = barFullWidth
+        bar.layoutParams = lp
+        bar.post {
+            releaseBallAnchor()
+            clampPanelPosition()
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        binding = ActivityEditBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(0, bars.top, 0, 0)
+            insets
+        }
+
+        noteId = intent.getLongExtra(EXTRA_ID, MainActivity.NEW_NOTE)
+        NoteRepository.find(this, noteId)?.let {
+            binding.contentInput.setText(it.content)
+            // 光标放到末尾，方便继续写
+            binding.contentInput.setSelection(binding.contentInput.text?.length ?: 0)
+        }
+
+        // 边打字边高亮 Markdown 符号（setText 之后再挂，避免加载时触发一次）
+        binding.contentInput.addTextChangedListener(Md.watcher(this))
+
+        binding.toolbar.setNavigationIcon(com.example.mdnotes.R.drawable.ic_back)
+        binding.toolbar.setNavigationOnClickListener { finish() }
+        binding.toolbar.inflateMenu(R.menu.edit_menu)
+        binding.toolbar.setOnMenuItemClickListener {
+            when (it.itemId) {
+                R.id.action_preview -> { togglePreview(); true }
+                R.id.action_delete -> { delete(); true }
+                else -> false
+            }
+        }
+
+        bindMarkdownBar()
+
+        // 按住悬浮球可拖动，整个浮动面板（工具栏+悬浮球）跟随移动
+        setupFloatingDrag()
+
+        // 面板尺寸变化（工具栏展开/收起）时保持悬浮球原地不动
+        binding.floatingPanel.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            keepBallAnchored()
+        }
+
+        // 已有便签默认进预览，点右上角「编辑」才切到编辑
+        if (noteId != MainActivity.NEW_NOTE) {
+            previewMode = true
+            showPreview()
+        }
+
+        // 恢复上次的悬浮球位置；预览态面板被隐藏、量不到尺寸，这种情况留给 showEdit() 再恢复
+        restoreBallPosition()
+    }
+
+    // ---------- 可拖动悬浮球（点击展开/收起工具栏，按住拖动） ----------
+
+    private var dragDownX = 0f
+    private var dragDownY = 0f
+    private var dragPanelStartX = 0f
+    private var dragPanelStartY = 0f
+    private var isDragging = false
+
+    private fun setupFloatingDrag() {
+        val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
+        binding.fabMarkdown.setOnTouchListener { _, event ->
+            val panel = binding.floatingPanel
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    panel.animate().cancel()
+                    dragDownX = event.rawX
+                    dragDownY = event.rawY
+                    dragPanelStartX = panel.x
+                    dragPanelStartY = panel.y
+                    isDragging = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - dragDownX
+                    val dy = event.rawY - dragDownY
+                    if (abs(dx) > touchSlop || abs(dy) > touchSlop) {
+                        isDragging = true
+                    }
+                    if (isDragging) {
+                        val parent = panel.parent as ViewGroup
+                        val maxX = (parent.width - panel.width).coerceAtLeast(0)
+                        val maxY = (parent.height - panel.height).coerceAtLeast(0)
+                        panel.x = (dragPanelStartX + dx).coerceIn(0f, maxX.toFloat())
+                        panel.y = (dragPanelStartY + dy).coerceIn(0f, maxY.toFloat())
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (isDragging) {
+                        ballMoved = true
+                        saveBallPosition()
+                    } else {
+                        toggleMarkdownBar()
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    /** 点击悬浮球：展开 / 收起工具栏 */
+    private fun toggleMarkdownBar() {
+        val show = !mdBarExpanded
+        mdBarExpanded = show
+        if (show) expandBar() else collapseBar()
+        bounceFab(show)
+    }
+
+    /** 展开：工具栏从球的这一侧生长，按钮像火车一样一节一节滑出来 */
+    private fun expandBar() {
+        val bar = binding.mdBar
+        barAnimator?.cancel()
+        bar.removeCallbacks(collapseFinish)
+
+        captureBallAnchor()
+        expandLeft = pickExpandLeft()
+        applyGrowthSide(!expandLeft)
+
+        // 起步：容器宽度收成 0，按钮先藏在球这一侧
+        val lp = bar.layoutParams
+        lp.width = 0
+        bar.layoutParams = lp
+        bar.visibility = View.VISIBLE
+        bar.alpha = 1f
+        bar.translationY = 0f
+
+        val slide = 18f * density * (if (expandLeft) 1f else -1f)
+        barButtons.forEach {
+            it.animate().cancel()
+            it.alpha = 0f
+            it.translationX = slide
+        }
+
+        // 容器宽度生长：内容被裁剪，视觉上就是一个接一个冒出来
+        barAnimator = ValueAnimator.ofInt(0, barFullWidth).apply {
+            duration = 240L
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { va ->
+                val w = va.animatedValue as Int
+                val p = bar.layoutParams
+                if (p.width != w) {
+                    p.width = w
+                    bar.layoutParams = p
+                }
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    if (!mdBarExpanded) return
+                    val p = bar.layoutParams
+                    p.width = barFullWidth
+                    bar.layoutParams = p
+                    bar.post {
+                        releaseBallAnchor()
+                        clampPanelPosition()
+                    }
+                }
+            })
+            start()
+        }
+
+        // 按钮依次滑入（错峰出场）
+        barButtons.forEachIndexed { index, button ->
+            button.animate()
+                .alpha(1f)
+                .translationX(0f)
+                .setStartDelay(30L + index * 26L)
+                .setDuration(170L)
+                .setInterpolator(DecelerateInterpolator())
+                .start()
+        }
+    }
+
+    /** 收起：按钮从远到近依次退回球里 */
+    private fun collapseBar() {
+        val bar = binding.mdBar
+        barAnimator?.cancel()
+        bar.removeCallbacks(collapseFinish)
+        captureBallAnchor()
+
+        val slide = 18f * density * (if (expandLeft) 1f else -1f)
+        barButtons.forEachIndexed { index, button ->
+            button.animate()
+                .alpha(0f)
+                .translationX(slide)
+                .setStartDelay(((barButtons.size - 1 - index) * 18).toLong())
+                .setDuration(120L)
+                .setInterpolator(AccelerateInterpolator())
+                .start()
+        }
+        bar.postDelayed(collapseFinish, 120L + barButtons.size * 18L + 30L)
+    }
+
+    /** 哪边放得下就朝哪边展开；两边都不够时选空间更大的一边 */
+    private fun pickExpandLeft(): Boolean {
+        val panel = binding.floatingPanel
+        val parent = panel.parent as? ViewGroup ?: return true
+        if (parent.width == 0) return true
+
+        val ball = binding.fabMarkdown
+        val ballCx = panel.x + ball.left + ball.width / 2f
+        val need = barFullWidth + 16f * density + ball.width
+        val spaceLeft = ballCx
+        val spaceRight = parent.width - ballCx
+
+        return when {
+            spaceLeft >= need -> true
+            spaceRight >= need -> false
+            else -> spaceLeft >= spaceRight
+        }
+    }
+
+    /**
+     * 悬浮球靠哪一侧，工具栏就跟它一起靠哪一侧。
+     * 球在左半屏 → 两者都 START，工具栏从球向右伸展；球在右半屏 → 都 END，工具栏向左伸展。
+     * 只调工具栏的对齐是没用的：球永远贴在面板右端，工具栏只会朝一个方向长。
+     */
+    private fun applyGrowthSide(ballOnLeft: Boolean) {
+        val gravity = if (ballOnLeft) Gravity.START else Gravity.END
+        listOf(binding.fabMarkdown, binding.mdBar).forEach { v ->
+            val lp = v.layoutParams as? LinearLayout.LayoutParams ?: return@forEach
+            if (lp.gravity != gravity) {
+                lp.gravity = gravity
+                v.layoutParams = lp
+            }
+        }
+    }
+
+    // ---------- 悬浮球位置记忆 ----------
+
+    private fun captureBallAnchor() {
+        val panel = binding.floatingPanel
+        val ball = binding.fabMarkdown
+        anchorCx = panel.x + ball.left + ball.width / 2f
+        anchorCy = panel.y + ball.top + ball.height / 2f
+    }
+
+    private fun releaseBallAnchor() {
+        anchorCx = Float.NaN
+        anchorCy = Float.NaN
+    }
+
+    /** 面板尺寸变化后，把球拉回原来的屏幕位置（否则展开时球会被顶走） */
+    private fun keepBallAnchored() {
+        if (anchorCx.isNaN() || anchorCy.isNaN()) return
+        val panel = binding.floatingPanel
+        val ball = binding.fabMarkdown
+        if (ball.width == 0) return
+        val dx = anchorCx - (panel.x + ball.left + ball.width / 2f)
+        val dy = anchorCy - (panel.y + ball.top + ball.height / 2f)
+        if (abs(dx) > 0.5f || abs(dy) > 0.5f) {
+            panel.x += dx
+            panel.y += dy
+        }
+    }
+
+    /** 记住悬浮球位置：存"相对父容器的比例"，换分辨率也不会跑丢 */
+    private fun saveBallPosition() {
+        // 还没恢复过、用户也没拖过时不要写，否则默认位置会被当成"记忆"存下去
+        if (!ballRestored && !ballMoved) return
+        val panel = binding.floatingPanel
+        if (panel.visibility != View.VISIBLE) return
+        val parent = panel.parent as? ViewGroup ?: return
+        val ball = binding.fabMarkdown
+        if (parent.width == 0 || parent.height == 0 || ball.width == 0) return
+
+        val cx = panel.x + ball.left + ball.width / 2f
+        val cy = panel.y + ball.top + ball.height / 2f
+        ballPrefs.edit()
+            .putFloat(KEY_BALL_CX, (cx / parent.width).coerceIn(0f, 1f))
+            .putFloat(KEY_BALL_CY, (cy / parent.height).coerceIn(0f, 1f))
+            .apply()
+    }
+
+    private fun restoreBallPosition() {
+        if (ballRestored) return
+        if (!ballPrefs.contains(KEY_BALL_CX) || !ballPrefs.contains(KEY_BALL_CY)) {
+            ballRestored = true
+            return
+        }
+        // 面板不可见时（预览态）它根本不参与布局，测量值全是 0，这时恢复必然算错
+        if (previewMode) return
+        binding.floatingPanel.post { applyBallPosition(10) }
+    }
+
+    private fun applyBallPosition(attemptsLeft: Int) {
+        if (ballRestored) return
+        val panel = binding.floatingPanel
+        val parent = panel.parent as? ViewGroup ?: return
+        val ball = binding.fabMarkdown
+        if (panel.width == 0 || ball.width == 0 || parent.width == 0 || parent.height == 0) {
+            if (attemptsLeft > 0) panel.post { applyBallPosition(attemptsLeft - 1) }
+            return
+        }
+        ballRestored = true
+        val cxRatio = ballPrefs.getFloat(KEY_BALL_CX, 1f)
+        val cyRatio = ballPrefs.getFloat(KEY_BALL_CY, 1f)
+        panel.x = cxRatio * parent.width - ball.left - ball.width / 2f
+        panel.y = cyRatio * parent.height - ball.top - ball.height / 2f
+        clampPanelInstant()
+    }
+
+    private fun clampPanelInstant() {
+        val panel = binding.floatingPanel
+        val parent = panel.parent as? ViewGroup ?: return
+        val maxX = (parent.width - panel.width).coerceAtLeast(0).toFloat()
+        val maxY = (parent.height - panel.height).coerceAtLeast(0).toFloat()
+        panel.x = panel.x.coerceIn(0f, maxX)
+        panel.y = panel.y.coerceIn(0f, maxY)
+    }
+
+    /** 悬浮球点击回弹反馈：先放大再弹回 */
+    private fun bounceFab(expand: Boolean) {
+        val fab = binding.fabMarkdown
+        fab.animate().cancel()
+        fab.animate()
+            .scaleX(1.14f).scaleY(1.14f)
+            .setDuration(120)
+            .setInterpolator(DecelerateInterpolator())
+            .withEndAction {
+                fab.animate()
+                    .scaleX(1f).scaleY(1f)
+                    .setDuration(if (expand) 200 else 150)
+                    .setInterpolator(OvershootInterpolator(1.6f))
+                    .start()
+            }
+            .start()
+    }
+
+    /** 把浮动面板限制在父容器范围内（等测量完成后再纠正） */
+    private fun clampPanelPosition() {
+        val panel = binding.floatingPanel
+        val parent = panel.parent as? ViewGroup ?: return
+        panel.post {
+            val maxX = (parent.width - panel.width).coerceAtLeast(0)
+            val maxY = (parent.height - panel.height).coerceAtLeast(0)
+            val targetX = panel.x.coerceIn(0f, maxX.toFloat())
+            val targetY = panel.y.coerceIn(0f, maxY.toFloat())
+            if (targetX != panel.x || targetY != panel.y) {
+                panel.animate()
+                    .x(targetX).y(targetY)
+                    .setDuration(200)
+                    .setInterpolator(DecelerateInterpolator())
+                    .start()
+            }
+        }
+    }
+
+    /** 离开页面就保存，不用手动点保存 */
+    override fun onPause() {
+        save()
+        saveBallPosition()
+        super.onPause()
+    }
+
+    private fun save() {
+        val content = binding.contentInput.text?.toString().orEmpty()
+        if (content.isBlank()) return   // 空便签不存
+
+        val note = Note(
+            id = if (noteId == MainActivity.NEW_NOTE) System.currentTimeMillis() else noteId,
+            title = extractTitle(content),   // 标题从第一个 H1 自动提取
+            content = content,
+            updatedAt = System.currentTimeMillis()
+        )
+        NoteRepository.upsert(this, note)
+        noteId = note.id
+    }
+
+    private fun delete() {
+        if (noteId == MainActivity.NEW_NOTE) { finish(); return }
+        NoteRepository.softDelete(this, noteId)
+        toast("已删除")
+        finish()
+    }
+
+    // ---------- 预览 ----------
+
+    private fun togglePreview() {
+        previewMode = !previewMode
+        if (previewMode) showPreview() else showEdit()
+    }
+
+    private fun showPreview() {
+        // 面板马上要隐藏，先把当前位置存下来
+        saveBallPosition()
+        Md.setMarkdown(binding.previewText, binding.contentInput.text?.toString().orEmpty())
+        // 先打开可选中，再换 MovementMethod：setTextIsSelectable 会把 movementMethod
+        // 重置成 ArrowKeyMovementMethod，顺序反了就选不中文字
+        binding.previewText.setTextIsSelectable(true)
+        // 换掉会吞事件的 LinkMovementMethod：链接照样能点，普通文字可以长按选中复制
+        binding.previewText.movementMethod = CopyableLinkMovementMethod()
+        binding.floatingPanel.visibility = View.GONE
+        binding.contentLayout.visibility = View.GONE
+        binding.previewScroll.visibility = View.VISIBLE
+        binding.toolbar.menu.findItem(R.id.action_preview).title = getString(R.string.action_edit)
+    }
+
+    private fun showEdit() {
+        binding.previewScroll.visibility = View.GONE
+        binding.contentLayout.visibility = View.VISIBLE
+        binding.floatingPanel.visibility = View.VISIBLE
+        // 预览态躲过去的恢复，等面板重新可见、量到尺寸后再补上
+        binding.floatingPanel.post { restoreBallPosition() }
+        binding.toolbar.menu.findItem(R.id.action_preview).title = getString(R.string.action_preview)
+    }
+
+    // ---------- Markdown 快捷栏 ----------
+
+    private fun bindMarkdownBar() {
+        binding.btnH1.setOnClickListener { prefixLine("# ") }
+        binding.btnH2.setOnClickListener { prefixLine("## ") }
+        binding.btnBold.setOnClickListener { wrapSelection("**", "**") }
+        binding.btnItalic.setOnClickListener { wrapSelection("*", "*") }
+        binding.btnStrike.setOnClickListener { wrapSelection("~~", "~~") }
+        binding.btnCode.setOnClickListener { wrapSelection("`", "`") }
+        binding.btnCodeBlock.setOnClickListener { wrapSelection("```\n", "\n```") }
+        binding.btnList.setOnClickListener { prefixLine("- ") }
+        binding.btnTask.setOnClickListener { prefixLine("- [ ] ") }
+        binding.btnQuote.setOnClickListener { prefixLine("> ") }
+        binding.btnLink.setOnClickListener { insertAtCursor("[说明](https://)") }
+    }
+
+    /** 给选中的文字两边加符号；没选中就在光标处插入一对 */
+    private fun wrapSelection(before: String, after: String) {
+        val et = binding.contentInput
+        val editable = et.text ?: return
+        val start = et.selectionStart.coerceAtLeast(0)
+        val end = et.selectionEnd.coerceAtLeast(start)
+        if (start == end) {
+            editable.insert(start, before + after)
+            et.setSelection(start + before.length)
+        } else {
+            editable.insert(end, after)
+            editable.insert(start, before)
+            et.setSelection(start + before.length, end + before.length)
+        }
+    }
+
+    /** 在当前行的行首插入前缀 */
+    private fun prefixLine(prefix: String) {
+        val et = binding.contentInput
+        val editable = et.text ?: return
+        val start = et.selectionStart.coerceAtLeast(0)
+        val lineStart = editable.toString().lastIndexOf('\n', (start - 1).coerceAtLeast(0)) + 1
+        editable.insert(lineStart, prefix)
+        et.setSelection(start + prefix.length)
+    }
+
+    private fun insertAtCursor(text: String) {
+        val et = binding.contentInput
+        val editable = et.text ?: return
+        val start = et.selectionStart.coerceAtLeast(0)
+        editable.insert(start, text)
+        et.setSelection(start + text.length)
+        et.requestFocus()
+    }
+}
