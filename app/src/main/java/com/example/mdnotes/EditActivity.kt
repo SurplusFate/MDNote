@@ -436,7 +436,18 @@ class EditActivity : AppCompatActivity() {
         applyImmersiveStatusBar(binding.toolbar)
 
         noteId = intent.getLongExtra(EXTRA_ID, MainActivity.NEW_NOTE)
-        NoteRepository.find(this, noteId)?.let {
+        val existing = try {
+            NoteRepository.find(this, noteId)
+        } catch (e: CorruptStorageException) {
+            toast("数据文件损坏，已恢复上次备份")
+            null
+        }
+        if (existing == null && noteId != MainActivity.NEW_NOTE) {
+            // 现有笔记读不出：回列表，别在空白页误存覆盖
+            finish()
+            return
+        }
+        existing?.let {
             currentContent = it.content
             noteFontSize = it.fontSize
             // 便签自带的图片先装进内存，供 WebView 拦截请求和保存使用
@@ -1091,7 +1102,11 @@ class EditActivity : AppCompatActivity() {
         // 既有的便签：直接取出仓库里那条对象就地改内容字段——pinned 等元数据自然保留，
         // 不会被 upsert 的"删旧加新"冲掉（之前每次退出编辑都重建 Note、pinned 默认
         // false，导致置顶一进编辑页就丢）；只有真正的新便签才新建。
-        val note = NoteRepository.find(this, noteId)?.apply {
+        val note = (try {
+            NoteRepository.find(this, noteId)
+        } catch (e: CorruptStorageException) {
+            null
+        })?.apply {
             title = extractTitle(content)          // 标题从第一个 H1 自动提取
             this.content = content
             updatedAt = System.currentTimeMillis()
@@ -1105,7 +1120,12 @@ class EditActivity : AppCompatActivity() {
             images = if (noteImages.isEmpty()) null else LinkedHashMap(noteImages),
             fontSize = noteFontSize
         )
-        NoteRepository.upsert(this, note)
+        try {
+            NoteRepository.upsert(this, note)
+        } catch (e: CorruptStorageException) {
+            toast("保存失败：数据文件损坏，已恢复上次备份")
+            return
+        }
         noteId = note.id
     }
 
@@ -1129,7 +1149,13 @@ class EditActivity : AppCompatActivity() {
 
     private fun doDelete() {
         deleted = true   // 必须先置位：finish() 触发的 onPause 不能再回写内容
-        NoteRepository.softDelete(this, noteId)
+        try {
+            NoteRepository.softDelete(this, noteId)
+        } catch (e: CorruptStorageException) {
+            toast("删除失败：数据文件损坏，已恢复上次备份")
+            finish()
+            return
+        }
         toast("已删除")
         finish()
     }

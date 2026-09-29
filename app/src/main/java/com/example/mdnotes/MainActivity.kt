@@ -94,8 +94,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun refresh() {
         val kw = binding.searchInput.text?.toString()?.trim().orEmpty()
-        val list = NoteRepository.visible(this).filter {
-            kw.isBlank() || it.title.contains(kw, true) || it.content.contains(kw, true)
+        val list = try {
+            NoteRepository.visible(this).filter {
+                kw.isBlank() || it.title.contains(kw, true) || it.content.contains(kw, true)
+            }
+        } catch (e: CorruptStorageException) {
+            toast("数据文件损坏，已恢复上次备份；仍异常请看 notes.json.corrupt.*")
+            emptyList()
         }
         adapter.submit(list)
         binding.emptyTip.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
@@ -133,7 +138,11 @@ class MainActivity : AppCompatActivity() {
             getString(if (adapter.allSelected()) R.string.action_unselect_all else R.string.action_select_all)
         binding.toolbar.menu.findItem(R.id.action_delete_selected)?.isEnabled = adapter.selectedCount > 0
         // 置顶按钮：选中项全部已置顶时显示「取消置顶」，否则「置顶」
-        val sel = NoteRepository.loadAll(this).filter { it.id in adapter.selectedIds() }
+        val sel = try {
+            NoteRepository.loadAll(this).filter { it.id in adapter.selectedIds() }
+        } catch (e: CorruptStorageException) {
+            emptyList<Note>()
+        }
         val allPinned = sel.isNotEmpty() && sel.all { it.pinned }
         binding.toolbar.menu.findItem(R.id.action_pin)?.title =
             getString(if (allPinned) R.string.action_unpin else R.string.action_pin)
