@@ -13,8 +13,8 @@ android {
         applicationId 'com.example.mdnotes'
         minSdk 26
         targetSdk 35
-        versionCode 116
-        versionName '1.94-lirelative'
+        versionCode 124
+        versionName '1.102-selectionmodel'
     }
 
     buildTypes {
@@ -49,6 +49,9 @@ android {
 }
 
 dependencies {
+    // --- 单元测试（merge 确定性排序等纯逻辑，不依赖 Android）---
+    testImplementation 'junit:junit:4.13.2'
+
     // --- Android 基础 ---
     implementation 'androidx.core:core-ktx:1.13.1'
     implementation 'androidx.appcompat:appcompat:1.7.0'
