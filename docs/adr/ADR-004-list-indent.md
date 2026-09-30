@@ -38,9 +38,10 @@ Kotlin 侧 `EditActivity` 的 `onJsIndentTab` / `onJsOutdentTab` / `requestTab` 
 
 - 无序父下无序子项：缩进 unit = 2（`- ` 宽度）。
 - 有序父下无序子项：缩进 unit = 3（`1. ` 宽度）。
-- **Lute 的 IR 解析不支持「有序列表嵌套」**：有序子项无论缩进多少都被当同级续写。
-  因此对**有序项**做 indent 为 no-op（与 Vditor 原生 Tab 行为一致，无回归）。
-  这是引擎能力限制，不是本模块 bug，记入本 ADR 反向约束。
+- **（已推翻）原结论「Lute 不支持有序嵌套、故有序 indent 为 no-op」经专项调查证伪**：
+  实测 Lute 支持有序嵌套，CommonMark 仅要求子有序起始为 `1.`（`2.`/`3.` 被当懒惰续写
+  文本摊平）。该限制已在待办 #52 / **ADR-008** 解除——indent 有序项会重排编号并正确嵌套。
+  本 ADR 原「反向约束」作废，详见 ADR-008。
 - indent 只能把「与上一列表项同缩进的兄弟项」挂到上一项下；已嵌套项（上一项目更浅）
   再 indent 无意义 → no-op。
 - outdent 按「缩进比当前项更浅的最近列表项」的类型取 cut（有序 3 / 无序 2），

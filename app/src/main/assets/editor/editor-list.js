@@ -9,9 +9,10 @@
  * 设计依据（headless Chromium + Vditor/Lute 实测，非猜测）：
  *  - 无序子项嵌套 unit = 2（'- ' 宽度）：`- a` 下 `- b` → `  - b` 正确嵌套。
  *  - 有序父下无序子项 unit = 3（'1. ' 宽度）：`1. a` 下 `- b` → `   - b` 正确嵌套。
- *  - Lute 的 IR 解析**不支持有序列表嵌套**（有序子项无论缩进多少都被当成同级续写），
- *    故对「有序项」做 indent 是 no-op（与 Vditor 原生 Tab 行为一致，无回归）；
- *    该限制记入 ADR-004，不是本模块 bug。
+ *  - Lute 的 IR 解析**支持有序列表嵌套**，但 CommonMark 规定「子有序列表起始编号
+ *    必须为 `1.`」，写 `2.`/`3.` 会被当成父项的懒惰续写文本摊平（见 ADR-004 调查）。
+ *    故 indent 有序项时，把该项及其子树挂到上一级，并调用 renumberOrderedLines 统一
+ *    重排编号：子层从 1 起、同级连续、顶层全局连续——符合 Obsidian 习惯（待办 #52 / ADR-008）。
  *  - indent 只能把「与上一列表项同缩进的兄弟项」挂到上一项下；已嵌套项（上一项目缩进更浅）
  *    再 indent 无意义 → no-op。
  */
@@ -73,6 +74,58 @@
   }
 
   /**
+   * 重排有序列表编号（待办 #52 / ADR-008）。
+   *
+   * 规则（对齐 Obsidian / CommonMark 渲染习惯）：
+   *  - 顶层有序列表：从 1 全局连续（1, 2, 3…）。
+   *  - 每个嵌套层（缩进比父更深）：从 1 重新计数（不继承父编号）。
+   *  - 同级连续：同一父下的兄弟项 1, 2, 3…。
+   *  - 无序列表项：不编号，且**打断**有序层级上下文（其后有序项重新从 1 计数，
+   *    层级由缩进决定）；无序项本身不参与有序祖先链。
+   *  - 非列表行：重置全部层级上下文（视作新块）。
+   *  - 空行：保留层级上下文（列表项续写 / 子项之间的空行不重置编号）。
+   *
+   * 只改写有序项的「数字」，绝不改动缩进、无序项、任务状态或可见文字。
+   * 直接原地修改传入的 lines 数组并返回它。
+   *
+   * @param {string[]} lines 源码按行数组（会被原地修改）
+   * @returns {string[]} 同一数组引用
+   */
+  function renumberOrderedLines(lines) {
+    var stack = [];        // 祖先链：{indent, level}，level 为 1-based 嵌套深度
+    var counters = {};     // level -> 当前该层计数
+    var lastParentKey = {};// level -> 上次该层级的父标识（'root' 或 'indent:level'）
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (line.trim() === '') continue;                 // 空行：保留层级上下文
+      var it = parseListItem(line);
+      if (!it) { stack = []; counters = {}; lastParentKey = {}; continue; } // 非列表行：重置
+      if (!it.ordered) {                                // 无序项：作为祖先参与层级（子有序项
+        while (stack.length && stack[stack.length - 1].indent >= it.indent) stack.pop();
+        var ulevel = stack.length === 0 ? 1 : stack[stack.length - 1].level + 1;
+        stack.push({ indent: it.indent, level: ulevel });
+        counters = {}; lastParentKey = {};               // 但打断「有序同级连续计数」：其后有序项重新从 1
+        continue;
+      }
+      // 弹出所有缩进 >= 当前项的祖先（更深或同级不可能是其父；父必须严格更浅）
+      while (stack.length && stack[stack.length - 1].indent >= it.indent) stack.pop();
+      var level = stack.length === 0 ? 1 : stack[stack.length - 1].level + 1;
+      var parentKey = stack.length === 0
+        ? 'root'
+        : (stack[stack.length - 1].indent + ':' + stack[stack.length - 1].level);
+      if (lastParentKey[level] === parentKey) counters[level] = (counters[level] || 0) + 1;
+      else counters[level] = 1;
+      lastParentKey[level] = parentKey;
+      // 仅改写行首编号数字，保留缩进与后缀（. / )）
+      lines[i] = line.replace(/^(\s*)(\d+)([.)])/, function (_, sp, _num, suf) {
+        return sp + counters[level] + suf;
+      });
+      stack.push({ indent: it.indent, level: level });
+    }
+    return lines;
+  }
+
+  /**
    * 加缩进（indent）。
    * @param src      当前 Markdown 源码
    * @param caretLine 光标所在源码行号（0-based）；该行必须是列表项
@@ -88,11 +141,14 @@
     var prev = prevListItem(lines, caretLine);
     if (!prev) return makeResult(src, false, null);         // 列表首项：无处可挂 → no-op
     if (prev.item.indent < it.indent) return makeResult(src, false, null); // 已嵌套：再缩进无意义
-    if (it.ordered) return makeResult(src, false, null);   // Lute 不支持有序嵌套：no-op
 
     var unit = prev.item.ordered ? 3 : 2;
     var end = subtreeEnd(lines, caretLine, it.indent);
     for (var j = caretLine; j <= end; j++) lines[j] = repeat(unit) + lines[j];
+
+    // 挂到上一级后统一重排编号（子层从 1 起、同级连续、顶层全局连续）。
+    // 无序项不受影响（无编号）；有序项按层级重排（见 renumberOrderedLines）。
+    renumberOrderedLines(lines);
 
     var newOffset = (caretOffset != null) ? caretOffset + unit : null;
     return makeResult(lines.join('\n'), true, { line: caretLine, offset: newOffset });
@@ -128,6 +184,10 @@
       var rem = Math.min(cut, lead);
       lines[k] = lines[k].slice(rem);
     }
+
+    // 弹回父层（或顶层）后统一重排编号，使新位置序号接回父层、同级保持连续。
+    renumberOrderedLines(lines);
+
     var newOffset = (caretOffset != null) ? caretOffset - cut : null;
     if (newOffset != null && newOffset < 0) newOffset = 0;
     return makeResult(lines.join('\n'), true, { line: caretLine, offset: newOffset });
@@ -167,6 +227,7 @@
 
   return {
     parseListItem: parseListItem,
+    renumberOrderedLines: renumberOrderedLines,
     indent: indent,
     outdent: outdent,
     toggleTask: toggleTask
