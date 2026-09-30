@@ -13,8 +13,8 @@ android {
         applicationId 'com.example.mdnotes'
         minSdk 26
         targetSdk 35
-        versionCode 124
-        versionName '1.102-selectionmodel'
+        versionCode 125
+        versionName '1.103-interaction'
     }
 
     buildTypes {

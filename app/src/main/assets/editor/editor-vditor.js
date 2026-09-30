@@ -951,12 +951,20 @@
      *     并彻底去掉 setTimeout(0) 时序 hack。框选（非 collapsed）/段落/引用/叶子项零回归。
      */
     var _liCaretFixDone = false;
+    /**
+     * 光标职责重划分（v1.103，对照重构方案第 1/4/9/10/42/43 节）：
+     *  - 普通点击（段落/标题/引用/普通 li/有序/无序/任务/checkbox）一律不接管，交回 WebView 原生 Selection；
+     *  - LogicalCursor（domToLogicalCursor / logicalCursorToDom）降级为「结构变化后的恢复机制」
+     *    （缩进/减缩进由 transformList 调用，本文件不动），不是主光标系统；
+     *  - 本函数仅作「极窄 Fallback」：针对嵌套列表父 LI 末尾点击被 Chromium 归到块首这一明确 Bug
+     *    （已 headless 实锤），在 click 时读原生落位、仅当原生归块首且用户点中后段才用 hit-test 纠正。
+     *  - 禁止 mousedown / preventDefault / setTimeout；禁止每次点击算 logical cursor（本监听只在嵌套父项触发）。
+     */
     function installIRLiCaretFix(irEl) {
         if (!irEl || _liCaretFixDone) return;
         _liCaretFixDone = true;
 
-        // 逐字符命中：在 li 自身文字节点（不含后代子列表）上，按点击 (x,y) 算精确字符偏移。
-        // 对标 ProseMirror 的 hit-test：逐 text node 测矩形，命中行内按 x 比例映射。
+        // 降级 Fallback 用：li 自身可见文字（不含后代子列表、跳过 Vditor marker / checkbox）上的逐字符命中。
         function hitOffsetInLi(li, x, y) {
             var nodes = [];
             (function walk(n) {
@@ -990,27 +998,26 @@
             return acc;   // 点击 y 不在任何文字行（落在块内空白）→ 落块末
         }
 
-        var pendingHit = null;   // mousedown 测量的未聚焦态命中（click 时消费）
-        // 测量阶段：mousedown 捕获 —— li 此时未聚焦，rect 干净即用户所见，命中精确
-        irEl.addEventListener('mousedown', function (e) {
-            if (e.button !== 0 || e.detail > 1) { pendingHit = null; return; }   // 仅左键单击
-            var li = e.target && e.target.closest ? e.target.closest('li') : null;
-            if (!li || li === irEl || !li.querySelector('ol, ul')) { pendingHit = null; return; }
-            pendingHit = { li: li, offset: hitOffsetInLi(li, e.clientX, e.clientY) };
-        }, true);
-        // 落位阶段：click 同步执行（此时已聚焦，用记录的 offset 走逻辑光标框架，无 setTimeout hack）
+        // 极窄 Fallback：仅嵌套列表父项；仅当原生把光标归块首、而用户点击落在后段时才纠正。
+        // 其余一切（普通点击/框选/长按拖选/checkbox）零接管，交回 WebView 原生。
         irEl.addEventListener('click', function (e) {
-            var ph = pendingHit; pendingHit = null;
-            if (!ph || !ph.li) return;
-            var li = e.target && e.target.closest ? e.target.closest('li') : null;
-            if (li !== ph.li) return;                                  // 拖拽框选跨 li：放行
+            if (e.button !== 0) return;
+            if (e.target && e.target.tagName === 'INPUT') return;     // checkbox 点击：不破坏 Vditor toggle / Selection
             var sel = window.getSelection();
-            if (!sel || !sel.isCollapsed) return;                      // 框选（非 collapsed）：放行
-            if (ph.offset < 0) return;
+            if (!sel || !sel.isCollapsed) return;                       // 框选 / 长按拖选：不接管
+            var li = e.target && e.target.closest ? e.target.closest('li') : null;
+            if (!li || li === irEl) return;
+            if (!li.querySelector('ol, ul')) return;                     // 极窄场景：仅嵌套列表父项
+            var want = hitOffsetInLi(li, e.clientX, e.clientY);          // 用户意图（li 自身可见文字）
+            if (want < 0) return;
+            var cur = domToLogicalCursor();                             // 只读原生落位，不接管普通点击
+            if (!cur) return;
             var bs = collectBlocks(irEl);
-            var idx = bs.indexOf(ph.li);
-            if (idx < 0) return;
-            logicalCursorToDom({ blockIndex: idx, offset: ph.offset });   // 复用逻辑光标框架（统一 Selection 权威）
+            var idx = bs.indexOf(li);
+            if (idx < 0 || idx !== cur.blockIndex) return;              // 原生落点不在本 li：不接管
+            if (cur.offset === 0 && want >= 1) {                        // 仅「原生归块首 vs 用户点中后段」纠正
+                logicalCursorToDom({ blockIndex: idx, offset: want });
+            }
         }, false);
     }
 
