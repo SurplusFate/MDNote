@@ -102,6 +102,8 @@ class EditActivity : AppCompatActivity() {
 
     /** 内容真理源镜像：装载前 = 笔记原文；装载后跟随 JS 的 onContentChanged */
     private var currentContent: String = ""
+    private var savedContent: String = ""   // Sprint 4 #64：最近一次成功保存的内容；dirty = (currentContent != savedContent)
+    private val dirty get() = currentContent != savedContent
 
     /** JS 是否处于编辑态（桥回报，驱动辅助栏显隐 / 返回键 / insets 联动） */
     private var jsEditing = false
@@ -363,6 +365,8 @@ class EditActivity : AppCompatActivity() {
                 "openUrl" -> onJsOpenUrl(ev.optString("a"))
                 "viewImage" -> onJsViewImage(ev.optString("a"))
                 "pickImage" -> onJsPickImage()
+                "undo" -> undoEdit()      // Sprint 4 #82-7：格式栏撤销按钮统一走 Kotlin 历史栈
+                "redo" -> redoEdit()
             }
         }
     }
@@ -391,6 +395,7 @@ class EditActivity : AppCompatActivity() {
         }
         existing?.let {
             currentContent = it.content
+            savedContent = it.content   // Sprint 4 #64：打开即视为已保存基线，初始不脏
             noteFontSize = it.fontSize
             // 便签自带的图片先装进内存，供 WebView 拦截请求和保存使用
             noteImages.clear()
@@ -452,7 +457,7 @@ class EditActivity : AppCompatActivity() {
         imePollHandler.removeCallbacks(imePollTask)   // 页面不可见，停轮询
         // 把还没落栈的输入补上，免得刚打的字撤不回来
         commitSnapshot()
-        if (!deleted) {
+        if (!deleted && dirty) {   // Sprint 4 #64：只有脏了才落盘，统一返回/后台/重建判断
             save()
             // 双保险：JS 侧编辑中的块在 visibilitychange 已即时上报；
             // 这里再从 WebView 拉一次最终内容，有变化就再落一遍盘
@@ -1069,6 +1074,7 @@ class EditActivity : AppCompatActivity() {
             return
         }
         noteId = note.id
+        savedContent = content   // Sprint 4 #64：标记已保存，dirty=false
     }
 
     /** 删除前确认：防手滑——软删除虽然留了墓碑，但用户侧没有回收站，删了就是没了 */

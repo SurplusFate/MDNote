@@ -113,9 +113,12 @@
     }
 
     function buildToolbar() {
-        // 缩进/减缩进由自实现 DOM 按钮提供（IR 下 Vditor 会 hide 原生按钮），故剔除
+        // 缩进/减缩进由自实现 DOM 按钮提供（IR 下 Vditor 会 hide 原生按钮），故剔除；
+        // undo/redo 改由自实现按钮走 Kotlin 历史栈（Sprint 4 #82-7：统一单一 undo 栈，
+        // 使结构变换可撤销——Vditor 原生 undo 不记录我们的 setValue 结构变换）。
         return effectiveIds().filter(function (id) {
-            return id !== 'indent' && id !== 'outdent';
+            return id !== 'indent' && id !== 'outdent'
+                && id !== 'undo' && id !== 'redo';
         });
     }
 
@@ -261,6 +264,36 @@
                 e.preventDefault();
                 if (type === 'indent') window.editor.indentLine();
                 else window.editor.outdentLine();
+            });
+            tb.appendChild(item);
+        });
+    }
+
+    /** Sprint 4：自实现 撤销/前进 按钮（替代 Vditor 原生 undo/redo，后者不记录
+     *  我们的 setValue 结构变换）。点击经 JS→Kotlin 队列调 Kotlin 历史栈（undoEdit/
+     *  redoEdit），与顶栏 action_undo 同一个栈，统一单一 undo 来源（#82-7）。 */
+    var UNDO_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-1"/></svg>';
+    var REDO_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h1"/></svg>';
+    function renderHistoryTools() {
+        var ids = effectiveIds();
+        if (ids.indexOf('undo') < 0 && ids.indexOf('redo') < 0) return;
+        var tb = document.querySelector('.vditor-toolbar');
+        if (!tb) return;
+        ['undo', 'redo'].forEach(function (type) {
+            if (ids.indexOf(type) < 0) return;
+            if (tb.querySelector('.mdnotes-history-tool[data-type="' + type + '"]')) return;
+            var item = document.createElement('div');
+            item.className = 'vditor-toolbar__item mdnotes-history-tool';
+            item.setAttribute('data-type', type);
+            var btn = document.createElement('div');
+            btn.className = 'vditor-tooltipped vditor-tooltipped__n';
+            btn.setAttribute('aria-label', type === 'undo' ? '撤销' : '前进');
+            btn.innerHTML = (type === 'undo') ? UNDO_SVG : REDO_SVG;
+            item.appendChild(btn);
+            item.addEventListener('mousedown', function (e) { e.preventDefault(); });
+            item.addEventListener('click', function (e) {
+                e.preventDefault();
+                pushEvent(type);   // 'undo' / 'redo' → Kotlin undoEdit/redoEdit（统一历史栈）
             });
             tb.appendChild(item);
         });
@@ -610,10 +643,13 @@
         }
     }
 
-    /** Vditor 渲染是异步的（IR 分块重绘），单次改写赶不上 → 补两次延时兜底 */
+    /** 首帧立即改写一次（Vditor 首次渲染 img:// 占位）；后续每次重绘由常驻
+     *  MutationObserver（setupImgObserver）合并触发改写，无需固定 delay 兜底
+     *  （审查 #82-2：delay 只能做缓冲、必须配状态/版本校验，此处用 opSeq 校验）。
+     *  80ms 那次纯 delay 兜底已移除——它和 observer 重复改写且无法防旧覆盖。 */
     function scheduleImgRewrite() {
-        setTimeout(function () { rewriteImgRefs(); }, 0);
-        setTimeout(function () { rewriteImgRefs(); }, 80);
+        var myOp = ++opSeq;
+        setTimeout(function () { if (myOp !== opSeq) return; rewriteImgRefs(); }, 0);
     }
 
     /**
@@ -726,6 +762,7 @@
             setTimeout(renderSpecialTools, 0);
             // v1.79：追加自实现的「缩进/减缩进」按钮（IR 下原生缩进不可用）
             setTimeout(renderIndentTools, 0);
+            setTimeout(renderHistoryTools, 0);
         } catch (e) {
             // 不再静默吞掉初始化异常：直接显示在纸面上，真机可直读排障
             if (diagTimer) { clearTimeout(diagTimer); diagTimer = null; }
@@ -899,6 +936,8 @@
 
     var indentDiag = '';   // 最近一次列表缩进/减缩进的结果（经 stat 回传 Kotlin，便于真机取证）
     var indentOps = { en: 0, ok: 0, er: 0 };   // 列表缩进/减缩进真实计数（面板不再恒为 0）
+    var opSeq = 0;         // Sprint 4：异步操作序号（审查 #82-12 / #3）——每次触发 setValue/改写的
+                          //   操作递增；异步回调落地前校验 myOp===opSeq，旧任务不覆盖新状态
 
     /**
      * Sprint 2+3：列表加/减缩进统一走 ListStructureTransformer（纯源码变换），
@@ -910,7 +949,10 @@
      */
     function transformList(op) {
         if (!vd || !ready) return;
-        var cur = domToLogicalCursor();                 // 逻辑光标 {blockIndex, offset}
+        var myOp = ++opSeq;                       // Sprint 4 opId 守卫：同步路径下无覆盖风险
+                                                  //   （setValue 同步重渲染，A 探针实证），但作为
+                                                  //   契约保留，防未来异步化旧任务覆盖新状态
+        var cur = domToLogicalCursor();           // 逻辑光标 {blockIndex, offset}
         if (!cur) { indentDiag = op + ':nopos'; indentOps.er++; return; }
         var srcLine = blockIndexToSrcLine(cur.blockIndex);
         if (srcLine < 0) { indentDiag = op + ':notfound'; indentOps.er++; return; }
@@ -927,6 +969,9 @@
         if (l1 > l0 + 2) {                       // 膨胀守卫：异常立即回滚，绝不把坏内容留在文档
             safe(function () { vd.setValue(src, false); });
             indentDiag = 'ROLLBACK ' + l0 + '->' + l1; indentOps.er++; return;
+        }
+        if (myOp !== opSeq) {                     // Sprint 4：setValue 期间有更新操作介入，
+            indentDiag = 'STALE ' + op; indentOps.er++; return;  // 旧光标还原放弃，绝不覆盖新状态
         }
         indentDiag = op + ' src rows=' + (l1 - l0);
         indentOps.ok++;
@@ -1041,9 +1086,11 @@
             vd = null; ready = false;
             mount(val);
         },
-        /** 撤回 / 重做：触发 Vditor 工具栏内置按钮（公共 API 未暴露，走 UI 按钮） */
-        undo: function () { clickBar('undo'); },
-        redo: function () { clickBar('redo'); },
+        /** 撤回 / 重做：Sprint 4 统一走 Kotlin 历史栈（commitSnapshot 记录所有内容
+         *  变化、含结构变换），经 JS→Kotlin 队列发事件——不再调 Vditor 原生 undo
+         *  （其栈不记录 setValue 结构变换，#82-7 实证不可撤销）。 */
+        undo: function () { pushEvent('undo'); },
+        redo: function () { pushEvent('redo'); },
         /**
          * v1.44：Kotlin 推送键盘状态（ime insets：边沿触发 + 页面就绪补推）。
          * v1.64：显隐已与键盘解耦（editing 驱动，悬浮键盘 insets 零证据），

@@ -13,8 +13,8 @@ android {
         applicationId 'com.example.mdnotes'
         minSdk 26
         targetSdk 35
-        versionCode 119
-        versionName '1.97-logicalcursor'
+        versionCode 120
+        versionName '1.98-stability'
     }
 
     buildTypes {
