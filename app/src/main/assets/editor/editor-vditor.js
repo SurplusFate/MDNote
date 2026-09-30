@@ -938,55 +938,79 @@
     }
 
     /**
-     * 点击光标归位修复（用户反馈：含子列表的有序/无序父项，点在自身文字「末尾」时光标被浏览器
-     * 归到「块首」的 Chromium contenteditable 怪癖；叶子项正常）。
-     * 根因：<li> 内紧跟块级子列表（<ol>/<ul>）时，点在文字右侧边界浏览器把光标放块首；
-     * 连 document.caretRangeFromPoint(点击坐标) 在同样的边界也返回块首——两者同源怪癖。
-     * 修复：仅接管「含子列表的 <li>」这一窄场景。改用「点击 clientX 在 li 自身文字节点包围盒
-     * 中的横向比例」反推字符偏移（中文等宽，线性映射精确），覆盖掉浏览器的错误归位；并延迟到
-     * Vditor 的 click 处理之后落位，避免被其覆盖。多行标签（getClientRects>1）x→字符映射失真，
-     * 放弃接管交回 Vditor。其余（段落/引用/叶子项/框选）零回归。不依赖任何逻辑光标代码。
+     * 点击光标归位 —— 参考 ProseMirror / Lexical「Selection 模型为真 + 自建命中测试」范式重写
+     * （替代 v1.101 的横向比例近似 + setTimeout 时序 hack，并并入 Sprint 3 逻辑光标框架，
+     *  消除「第二套光标机制」补丁味）：
+     *   - 浏览器 caretRangeFromPoint 在嵌套 <li> 边界会撒谎（归块首），故自建「逐字符命中测试」
+     *     算精确偏移：逐 text node 测矩形，命中行内按 x 比例映射 —— 比例字体也准、支持多行；
+     *   - 命中结果转成逻辑块坐标 {blockIndex, offset}，复用 logicalCursorToDom 落位
+     *     （与缩进/减缩进用同一套光标权威，统一 Selection 模型，不再直接 setStart）；
+     *   - 关键的「态一致性」修复：测量在 mousedown 捕获阶段进行（此时 li 仍是未聚焦的干净渲染，
+     *     无 Vditor 注入的 marker / 编辑态样式，rect 即用户所见），落位在 click 阶段用记录的
+     *     offset 执行 —— 避免「测量态(未聚焦)」与「命中态(聚焦)」两套 DOM 不一致导致的误差；
+     *     并彻底去掉 setTimeout(0) 时序 hack。框选（非 collapsed）/段落/引用/叶子项零回归。
      */
     var _liCaretFixDone = false;
     function installIRLiCaretFix(irEl) {
         if (!irEl || _liCaretFixDone) return;
         _liCaretFixDone = true;
-        irEl.addEventListener('click', function (e) {
-            var sel = window.getSelection();
-            if (!sel || !sel.isCollapsed) return;            // 仅处理点击（非框选）
-            var li = e.target && e.target.closest ? e.target.closest('li') : null;
-            if (!li || li === irEl) return;
-            if (!li.querySelector('ol, ul')) return;          // 窄场景：只接管含子列表的父项
-            // 取 li 自身可见文字节点（不含后代子列表）
-            var own = null;
+
+        // 逐字符命中：在 li 自身文字节点（不含后代子列表）上，按点击 (x,y) 算精确字符偏移。
+        // 对标 ProseMirror 的 hit-test：逐 text node 测矩形，命中行内按 x 比例映射。
+        function hitOffsetInLi(li, x, y) {
+            var nodes = [];
             (function walk(n) {
-                if (own) return;
-                if (n.nodeType === 3 && n.textContent.trim().length) { own = n; return; }
-                if (n.tagName === 'LI' && n !== li) return;
-                for (var c = 0; c < n.childNodes.length; c++) walk(n.childNodes[c]);
+                if (n === li) { for (var c = 0; c < n.childNodes.length; c++) walk(n.childNodes[c]); return; }
+                if (n.tagName === 'LI') return;                       // 后代 li 子树跳过
+                if (n.nodeType === 1) {                               // 跳过 Vditor 注入的 marker（contenteditable=false）与任务 checkbox
+                    if ((n.getAttribute && n.getAttribute('contenteditable') === 'false') || n.tagName === 'INPUT') return;
+                    for (var c = 0; c < n.childNodes.length; c++) walk(n.childNodes[c]);
+                    return;
+                }
+                if (n.nodeType === 3) { if (n.textContent.length) nodes.push(n); }
             })(li);
-            if (!own) return;
-            var len = own.textContent.length;
-            if (!len) return;
-            // 单行为前提：多行标签的 x→字符 映射会失真，放弃接管
-            var box = document.createRange();
-            box.selectNodeContents(own);
-            if (box.getClientRects().length > 1) return;
-            var rect = box.getBoundingClientRect();
-            if (!rect || !rect.width) return;
-            var frac = (e.clientX - rect.left) / rect.width;
-            if (frac < 0) frac = 0; else if (frac > 1) frac = 1;
-            var off = Math.round(frac * len);
-            // 延迟到 Vditor 的 click 处理之后，确保横向比例归位不被覆盖
-            setTimeout(function () {
-                var s2 = window.getSelection();
-                if (!s2 || !s2.isCollapsed) return;
-                var r = document.createRange();
-                try { r.setStart(own, off); } catch (err) { return; }
-                r.collapse(true);
-                s2.removeAllRanges();
-                s2.addRange(r);
-            }, 0);
+            if (!nodes.length) return -1;
+            var acc = 0;
+            for (var i = 0; i < nodes.length; i++) {
+                var node = nodes[i], len = node.textContent.length;
+                var range = document.createRange();
+                range.setStart(node, 0); range.setEnd(node, len);
+                var rects = range.getClientRects();
+                for (var r = 0; r < rects.length; r++) {
+                    var rect = rects[r];
+                    if (y >= rect.top && y <= rect.bottom) {          // 命中该行
+                        if (x <= rect.left) return acc;               // 行首（含左侧空白）→ 块内首
+                        if (x >= rect.right) { acc += len; break; }   // 行右侧之外 → 本节点末尾，续下一节点
+                        var frac = (x - rect.left) / Math.max(rect.width, 1);
+                        return acc + Math.round(Math.max(0, Math.min(1, frac)) * len);
+                    }
+                }
+                acc += len;                                            // 该行在点击 y 之下：累计后继续
+            }
+            return acc;   // 点击 y 不在任何文字行（落在块内空白）→ 落块末
+        }
+
+        var pendingHit = null;   // mousedown 测量的未聚焦态命中（click 时消费）
+        // 测量阶段：mousedown 捕获 —— li 此时未聚焦，rect 干净即用户所见，命中精确
+        irEl.addEventListener('mousedown', function (e) {
+            if (e.button !== 0 || e.detail > 1) { pendingHit = null; return; }   // 仅左键单击
+            var li = e.target && e.target.closest ? e.target.closest('li') : null;
+            if (!li || li === irEl || !li.querySelector('ol, ul')) { pendingHit = null; return; }
+            pendingHit = { li: li, offset: hitOffsetInLi(li, e.clientX, e.clientY) };
+        }, true);
+        // 落位阶段：click 同步执行（此时已聚焦，用记录的 offset 走逻辑光标框架，无 setTimeout hack）
+        irEl.addEventListener('click', function (e) {
+            var ph = pendingHit; pendingHit = null;
+            if (!ph || !ph.li) return;
+            var li = e.target && e.target.closest ? e.target.closest('li') : null;
+            if (li !== ph.li) return;                                  // 拖拽框选跨 li：放行
+            var sel = window.getSelection();
+            if (!sel || !sel.isCollapsed) return;                      // 框选（非 collapsed）：放行
+            if (ph.offset < 0) return;
+            var bs = collectBlocks(irEl);
+            var idx = bs.indexOf(ph.li);
+            if (idx < 0) return;
+            logicalCursorToDom({ blockIndex: idx, offset: ph.offset });   // 复用逻辑光标框架（统一 Selection 权威）
         }, false);
     }
 
