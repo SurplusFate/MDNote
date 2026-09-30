@@ -13,3 +13,6 @@ app/release/
 # 本地构建日志（非源码，不入仓）
 build_v*.log
 *.log
+
+# 交付用 git bundle 增量包（非源码，不入仓）
+*.bundle
