@@ -756,6 +756,9 @@
         try {
             vd = new Vditor(paper, makeOptions(value, currentNight));
             dockUpdate();   // 键盘若已弹出，立即吸附新工具栏（重挂载后工具栏是新建的）
+            if (vd.vditor && vd.vditor.ir && vd.vditor.ir.element) {
+                installIRLiCaretFix(vd.vditor.ir.element);   // 嵌套父项点击光标归位修复
+            }
             // v1.57：Vditor 工具栏 DOM 已生成，往末尾追加用户自定义插入文本按钮
             setTimeout(renderCustomTools, 0);
             // v1.58：追加「图片」等特殊内置工具按钮
@@ -932,6 +935,59 @@
             k++;
         }
         return -1;
+    }
+
+    /**
+     * 点击光标归位修复（用户反馈：含子列表的有序/无序父项，点在自身文字「末尾」时光标被浏览器
+     * 归到「块首」的 Chromium contenteditable 怪癖；叶子项正常）。
+     * 根因：<li> 内紧跟块级子列表（<ol>/<ul>）时，点在文字右侧边界浏览器把光标放块首；
+     * 连 document.caretRangeFromPoint(点击坐标) 在同样的边界也返回块首——两者同源怪癖。
+     * 修复：仅接管「含子列表的 <li>」这一窄场景。改用「点击 clientX 在 li 自身文字节点包围盒
+     * 中的横向比例」反推字符偏移（中文等宽，线性映射精确），覆盖掉浏览器的错误归位；并延迟到
+     * Vditor 的 click 处理之后落位，避免被其覆盖。多行标签（getClientRects>1）x→字符映射失真，
+     * 放弃接管交回 Vditor。其余（段落/引用/叶子项/框选）零回归。不依赖任何逻辑光标代码。
+     */
+    var _liCaretFixDone = false;
+    function installIRLiCaretFix(irEl) {
+        if (!irEl || _liCaretFixDone) return;
+        _liCaretFixDone = true;
+        irEl.addEventListener('click', function (e) {
+            var sel = window.getSelection();
+            if (!sel || !sel.isCollapsed) return;            // 仅处理点击（非框选）
+            var li = e.target && e.target.closest ? e.target.closest('li') : null;
+            if (!li || li === irEl) return;
+            if (!li.querySelector('ol, ul')) return;          // 窄场景：只接管含子列表的父项
+            // 取 li 自身可见文字节点（不含后代子列表）
+            var own = null;
+            (function walk(n) {
+                if (own) return;
+                if (n.nodeType === 3 && n.textContent.trim().length) { own = n; return; }
+                if (n.tagName === 'LI' && n !== li) return;
+                for (var c = 0; c < n.childNodes.length; c++) walk(n.childNodes[c]);
+            })(li);
+            if (!own) return;
+            var len = own.textContent.length;
+            if (!len) return;
+            // 单行为前提：多行标签的 x→字符 映射会失真，放弃接管
+            var box = document.createRange();
+            box.selectNodeContents(own);
+            if (box.getClientRects().length > 1) return;
+            var rect = box.getBoundingClientRect();
+            if (!rect || !rect.width) return;
+            var frac = (e.clientX - rect.left) / rect.width;
+            if (frac < 0) frac = 0; else if (frac > 1) frac = 1;
+            var off = Math.round(frac * len);
+            // 延迟到 Vditor 的 click 处理之后，确保横向比例归位不被覆盖
+            setTimeout(function () {
+                var s2 = window.getSelection();
+                if (!s2 || !s2.isCollapsed) return;
+                var r = document.createRange();
+                try { r.setStart(own, off); } catch (err) { return; }
+                r.collapse(true);
+                s2.removeAllRanges();
+                s2.addRange(r);
+            }, 0);
+        }, false);
     }
 
     var indentDiag = '';   // 最近一次列表缩进/减缩进的结果（经 stat 回传 Kotlin，便于真机取证）
