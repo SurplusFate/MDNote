@@ -761,157 +761,165 @@
      *    marker 即内容开头。最后用 createRange + getSelection 落光标。
      */
     /**
-     * v1.93：光标定位改为「单一全局字符偏移」坐标系——与 Vditor 内部 setSelection 同源。
-     * 证据（headless Chromium 实测）：IR 渲染后的 ir.element.textContent 是纯内容文字，
-     * 完全不含列表 marker（- / 1. ）与行首缩进空格；减缩进/加缩进只动源码层行首空格，
-     * 重渲染后 textContent 长度不变 → 光标在 textContent 中的全局偏移零校正即可还原。
-     * 因此彻底抛弃 v1.92 的 line+inner 双坐标系、countOwnMarkers 猜行号、li 遍历还原、
-     * 文本锚定兜底还原——那些都是绕开官方机制自己造的脆弱换算。
-     * 文本锚定（liOwnText）只保留用于「定位要改的源码行」这一件事（见 transformList）。
+     * Sprint 3：逻辑光标模型（审查 #6 / #82 规则 3、4）
+     *
+     * 逻辑光标 = { blockIndex, offset }
+     *  - blockIndex：先序遍历 ir.element 收集的「有效块」序列中的索引。
+     *    有效块 = 每个 li（无论嵌套层级）一行 + 每个顶层块级（P/H1-6/BLOCKQUOTE/PRE）一行；
+     *    ul/ol 容器本身不算块；li 内的 input/span 等内联元素不算块。
+     *    这个序号是「结构身份」，不依赖任何文字内容（满足规则 4：不以文本+第几个做永久身份），
+     *    也不依赖全局 textContent 偏移（满足规则 3）。
+     *  - offset：光标在该块「可见文字」中的字符偏移。IR 渲染后列表 marker（- / 1. ）与行首
+     *    缩进空格不在 li.textContent 里，故 offset 天然是「用户可见文字」偏移，重渲染后稳定。
+     *
+     * 缩进/减缩进只平移行首空格、不改块数与块内文字，故同一 li 的 blockIndex 与 offset 在
+     * 结构变换前后保持不变——这正是「结构变化后光标保持语义位置」（Sprint 3 目标）的保证。
+     *
+     * 还原用 data-ls-id 临时标签（审查 #6.2 session block identity，绝不写入 Markdown 文件）：
+     * 每次 setValue 重建 DOM 后按先序有效块序重打标签，再用 querySelector 定位，彻底脱离
+     * 旧版 li 文字指纹（caretLiPos/restoreLiPos/findSourceLineByLi/liOwnText）的脆弱猜测。
+     * 旧方案（v1.92~v1.94）三版坐标系均被真机/headless 打脸，根因见 ADR-005。
      */
-    /** 光标在 ir.element 整体 textContent 中的全局字符偏移（单坐标系）。取不到返回 null。 */
-    /**
-     * v1.94 光标坐标系（第三次重写，前两版都被真机打脸）：
-     *  · v1.92 line+inner：li 覆盖行数靠猜，混合文档错位 → 减错行。
-     *  · v1.93 全局字符偏移：实测发现 outdent/Tab 改变列表嵌套结构（子项↔同级）时，
-     *    Lute 重渲染后 textContent 的字符序列（换行文本节点）跟着变，「同一数字」
-     *    在新旧 DOM 里指向不同文字——headless 铁证：off=17 从「观后感开头」漂成
-     *    「哈哈哈末尾」。零校正假设不成立，真机表现即「光标跳到别的行」。
-     *  · v1.94 相对坐标系 {text, idx, off}：text=光标 li 的自有文字指纹
-     *    （liOwnText），idx=第几个同名 li，off=光标在 li 自有文本流内的字符偏移。
-     *    减缩进/加缩进只平移结构不改 li 自身文字与行内位置，三个量语义天然不变；
-     *    重渲染后按 text+idx 找回 li、按 off 落回字符。找不到（文字被改/折叠）
-     *    就放弃，光标留在 Vditor 放置处——绝不错位。 */
-    function caretLiPos() {
-        try {
-            var liEl = currentLiEl();
-            if (!liEl) return null;
-            var text = liOwnText(liEl);
-            if (!text) return null;
-            var lis = vd.vditor.ir.element.querySelectorAll('li');
-            var idx = 0, hit = false;
-            for (var i = 0; i < lis.length; i++) {
-                if (liOwnText(lis[i]) === text) {
-                    idx++;
-                    if (lis[i] === liEl) { hit = true; break; }
-                }
+    /** 先序收集「有效块」（每个 li=一行；顶层块级 p/h/blockquote/pre=一行；ul/ol 容器与内联元素不算块）。 */
+    function collectBlocks(root) {
+        var out = [];
+        (function walk(el) {
+            var kids = el.children;
+            for (var i = 0; i < kids.length; i++) {
+                var c = kids[i];
+                if (c.tagName === 'LI') { out.push(c); walk(c); }
+                else if (c.tagName === 'UL' || c.tagName === 'OL') { walk(c); }
+                else if (/^(P|H1|H2|H3|H4|H5|H6|BLOCKQUOTE|PRE)$/.test(c.tagName)) { out.push(c); }
+                else { walk(c); }   // 内联/装饰元素（input/span/div）不收，递归兜底
             }
-            if (!hit) return null;
+        })(root);
+        return out;
+    }
+
+    /** setValue 重建 DOM 后按先序有效块序重打 data-ls-id 标签（session 身份，不写 markdown）。 */
+    function rebuildBlockIds(root) {
+        if (!root) return 0;
+        var bs = collectBlocks(root);
+        for (var k = 0; k < bs.length; k++) bs[k].setAttribute('data-ls-id', String(k));
+        return bs.length;
+    }
+
+    /** 块内可见文字偏移：从 (node, off) 累计到该点的文字数；遇后代 LI 停止（偏移不跨子列表）。 */
+    function innerOffsetOf(block, node, off) {
+        var acc = 0, done = false;
+        (function walk(n) {
+            if (done) return true;
+            if (n === node) {
+                if (n.nodeType === 3) acc += Math.min(off, n.textContent.length);
+                else for (var k = 0; k < off && k < n.childNodes.length; k++)
+                    acc += (n.childNodes[k].textContent || '').length;
+                done = true; return true;
+            }
+            if (n.nodeType === 3) { acc += n.textContent.length; return false; }
+            if (n !== block && n.tagName === 'LI') return false;   // 跳过后代 li 子树
+            for (var c = 0; c < n.childNodes.length; c++) if (walk(n.childNodes[c])) return true;
+            return false;
+        })(block);
+        return acc;
+    }
+
+    /** 光标所在的有效块元素（li 或顶层块级）；在列表空白/容器上返回 null。 */
+    function currentBlockEl() {
+        if (!vd || !ready) return null;
+        var irEl = vd.vditor.ir.element;
+        var sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return null;
+        var r0 = sel.getRangeAt(0);
+        var el = (r0.startContainer.nodeType === 1) ? r0.startContainer : r0.startContainer.parentElement;
+        while (el && el !== irEl && !/^(LI|P|H1|H2|H3|H4|H5|H6|BLOCKQUOTE|PRE)$/.test(el.tagName)) {
+            el = el.parentElement;
+        }
+        return (el && el !== irEl) ? el : null;
+    }
+
+    /** DOM → 逻辑光标：取光标所在块的先序索引 + 块内可见文字偏移。取不到返回 null。 */
+    function domToLogicalCursor() {
+        try {
+            var irEl = vd.vditor.ir.element;
+            var bs = collectBlocks(irEl);
+            var el = currentBlockEl();
+            if (!el) return null;
+            var idx = bs.indexOf(el);
+            if (idx < 0) return null;
             var sel = window.getSelection();
-            if (!sel || !sel.rangeCount) return null;
-            var range0 = sel.getRangeAt(0);
-            var node = range0.startContainer, off = range0.startOffset;
-            var acc = 0, done = false;
-            (function walk(n) {
-                if (done) return true;
-                if (n === node) {
-                    if (n.nodeType === 3) acc += Math.min(off, n.textContent.length);
-                    else for (var k = 0; k < off && k < n.childNodes.length; k++)
-                        acc += (n.childNodes[k].textContent || '').length;
-                    done = true; return true;
-                }
-                if (n.nodeType === 3) { acc += n.textContent.length; return false; }
-                if (n !== liEl && n.tagName === 'LI') return false;   // 跳过后代 li 子树
-                for (var c = 0; c < n.childNodes.length; c++) if (walk(n.childNodes[c])) return true;
-                return false;
-            })(liEl);
-            return { text: text, idx: idx, off: acc };
+            var r0 = sel.getRangeAt(0);
+            return { blockIndex: idx, offset: innerOffsetOf(el, r0.startContainer, r0.startOffset) };
         } catch (e) { return null; }
     }
 
-    /** 按 {text,idx,off} 把光标落回：找第 idx 个同名 li，在其自有文本流走 off 个字符；
-     *  找不到 li（文字被改/懒延续折叠）或超长则安全降级（落 li 末尾/放弃）。 */
-    function restoreLiPos(pos) {
-        if (!pos || !pos.text) return;
+    /** 逻辑光标 → DOM：setValue 后按 data-ls-id 找目标块，落块内 offset 个字符；
+     *  结构真变导致标签缺失则安全降级（保持 Vditor 当前光标，规则 4 兜底）。 */
+    function logicalCursorToDom(cur) {
+        if (!cur) return false;
         try {
             var irEl = vd.vditor.ir.element;
-            var lis = irEl.querySelectorAll('li');
-            var idx = 0, targetLi = null, off = pos.off;
-            for (var i = 0; i < lis.length; i++) {
-                if (liOwnText(lis[i]) === pos.text) {
-                    idx++;
-                    if (idx === pos.idx) { targetLi = lis[i]; break; }
-                }
-            }
-            if (!targetLi) {
-                // 降级（v1.94）：Lute 懒延续折叠会把光标 li 吞进父 li 纯文本流
-                // （headless 实证：ownText 变成「哈哈哈2.观后感」，精确匹配消失，
-                // 光标被 setValue 留在文首——真机表现即「点减缩进后光标跑最顶上」）。
-                // 退而找「以光标 li 文字为前缀」的折叠宿主 li：取第 idx 个（不够则
-                // 取最后一个），偏移钳制在原文字长度内——落原文字处，绝不落文首。
-                var prefTotal = 0, prefLast = null;
-                for (var j = 0; j < lis.length; j++) {
-                    var own2 = liOwnText(lis[j]);
-                    if (own2.length > pos.text.length && own2.indexOf(pos.text) === 0) {
-                        prefTotal++;
-                        prefLast = lis[j];
-                        if (prefTotal === pos.idx) { prefLast = lis[j]; break; }
-                    }
-                }
-                targetLi = prefLast;
-                if (off > pos.text.length) off = pos.text.length;
-            }
-            if (!targetLi) return;                       // 彻底找不到：宁可不动也不落错行
+            rebuildBlockIds(irEl);
+            var el = irEl.querySelector('[data-ls-id="' + cur.blockIndex + '"]');
+            if (!el) return false;                      // 降级：不落错行
             var acc = 0, spot = null;
             (function walk(n) {
                 if (spot) return true;
                 if (n.nodeType === 3) {
                     var len = n.textContent.length;
-                    if (off <= acc + len) { spot = { node: n, off: off - acc }; return true; }
+                    if (cur.offset <= acc + len) { spot = { node: n, off: cur.offset - acc }; return true; }
                     acc += len; return false;
                 }
-                if (n !== targetLi && n.tagName === 'LI') return false;
+                if (n !== el && n.tagName === 'LI') return false;
                 for (var c = 0; c < n.childNodes.length; c++) if (walk(n.childNodes[c])) return true;
                 return false;
-            })(targetLi);
+            })(el);
             var range = document.createRange();
-            if (spot) {
-                range.setStart(spot.node, spot.off);
-                range.collapse(true);
-            } else {
-                range.selectNodeContents(targetLi);
-                range.collapse(false);                   // 偏移超长（行内文字变化）：落 li 末尾
-            }
-            var sel2 = window.getSelection();
-            sel2.removeAllRanges(); sel2.addRange(range);
-        } catch (e) {}
+            if (spot) { range.setStart(spot.node, spot.off); range.collapse(true); }
+            else { range.selectNodeContents(el); range.collapse(false); }   // 偏移超长：落块末尾
+            var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+            return true;
+        } catch (e) { return false; }
     }
 
-    /** 光标所在的 li 元素（用于文本锚定定位源码行）；不在 li 内返回 null。 */
-    function currentLiEl() {
-        try {
-            var irEl = vd.vditor.ir.element;
-            var sel = window.getSelection();
-            if (!sel || !sel.rangeCount) return null;
-            var node = sel.getRangeAt(0).startContainer;
-            var el = (node.nodeType === 1) ? node : node.parentElement;
-            while (el && el !== irEl && el.tagName !== 'LI') el = el.parentElement;
-            return (el && el !== irEl && el.tagName === 'LI') ? el : null;
-        } catch (e) { return null; }
+    /** 逻辑光标的 blockIndex（先序有效块序）→ getSource 源码行号。
+     *  getSource 是 DOM 反推的规范化源码，可能在有序嵌套等处插入空行，故不能用扁平行号做身份；
+     *  这里用「第 blockIndex 个非空内容行」对应（无续写多行时，有效块序 == 非空行序，精确）。
+     *  续写多行（一个 li 跨多行源码）为已知边角：此处映射会偏移，调用方应降级（规则 4 兜底）。 */
+    function blockIndexToSrcLine(blockIndex) {
+        if (blockIndex < 0) return -1;
+        var lines = getSource().split('\n');
+        var k = 0;
+        for (var i = 0; i < lines.length; i++) {
+            if (lines[i].trim() === '') continue;       // 跳过 Vditor 规范化空行
+            if (k === blockIndex) return i;
+            k++;
+        }
+        return -1;
     }
 
     var indentDiag = '';   // 最近一次列表缩进/减缩进的结果（经 stat 回传 Kotlin，便于真机取证）
     var indentOps = { en: 0, ok: 0, er: 0 };   // 列表缩进/减缩进真实计数（面板不再恒为 0）
 
     /**
-     * Sprint 2：列表加/减缩进统一走 ListStructureTransformer（纯源码变换，不依赖 DOM 猜测）。
-     * 流程：记 li 相对坐标 → 定位源码行 → transformer 计算新源码 → setValue 受控重渲染
-     * → 膨胀守卫 → 按 li 相对坐标还原光标。indent/outdent 不再区分「原生 Tab / 源码级」两套路径
-     * （原生 Tab 依赖 Kotlin 派发可信按键、且有 60/140ms 轮询时序风险；源码变换确定性、可单测）。
+     * Sprint 2+3：列表加/减缩进统一走 ListStructureTransformer（纯源码变换），
+     * 光标用「逻辑光标」模型（审查 #6 / #82 规则 3、4）还原：
+     *  DOM → 逻辑光标 {blockIndex, offset}（先序有效块序，不依赖文字指纹）→
+     *  blockIndex 映射成源码行 → transformer 计算新源码 → setValue 受控重渲染 →
+     *  膨胀守卫 → 按 data-ls-id 标签把逻辑光标还原到目标块（结构平移下 blockIndex/offset 不变）。
+     *  彻底脱离旧版 caretLiPos/restoreLiPos（文本+第几个 做身份，违反规则 4）与全局 textContent offset（违反规则 3）。
      */
     function transformList(op) {
         if (!vd || !ready) return;
-        var p = caretLiPos();
-        if (!p) { indentDiag = op + ':nopos'; indentOps.er++; return; }
+        var cur = domToLogicalCursor();                 // 逻辑光标 {blockIndex, offset}
+        if (!cur) { indentDiag = op + ':nopos'; indentOps.er++; return; }
+        var srcLine = blockIndexToSrcLine(cur.blockIndex);
+        if (srcLine < 0) { indentDiag = op + ':notfound'; indentOps.er++; return; }
         var src = getSource();
         if (src == null) return;
         var lines = src.split('\n');
-        var MARK = /^\s*(?:[-*+]\s+(?:\[[ xX]\]\s?)?|\d+\.\s)/;
-        var target = findSourceLineByLi(p.text, p.idx, lines, MARK);
-        if (target < 0) { indentDiag = op + ':notfound'; indentOps.er++; return; }
         var res = (op === 'indent')
-            ? window.ListTransformer.indent(src, target)
-            : window.ListTransformer.outdent(src, target);
+            ? window.ListTransformer.indent(src, srcLine)
+            : window.ListTransformer.outdent(src, srcLine);
         if (!res.changed) { indentDiag = op + ':noop'; return; }
         var l0 = lines.length;
         safe(function () { vd.setValue(res.src, false); });
@@ -922,49 +930,19 @@
         }
         indentDiag = op + ' src rows=' + (l1 - l0);
         indentOps.ok++;
-        restoreLiPos(p);                          // 结构平移下 li 相对坐标语义稳定
+        logicalCursorToDom(cur);                  // 逻辑光标还原：结构平移下 blockIndex/offset 不变
     }
 
     /**
-     * Sprint 2：加/减缩进统一入口见 transformList()（上方）。减缩进不再自己改源码，
+     * Sprint 2+3：加/减缩进统一入口见 transformList()（上方）。减缩进不再自己改源码，
      * 改由 ListStructureTransformer.outdent 计算（基于源码行变换，确定性、可单测，
      * 不再依赖 Vditor 原生 Shift+Tab——后者对深层子树有复制 bug）。
-     * 以下 liOwnText / lineCoreText / findSourceLineByLi 仅供光标 li 相对坐标（caretLiPos / restoreLiPos）使用。
+     * 原 liOwnText / lineCoreText / findSourceLineByLi（v1.92~v1.94 的 li 文字指纹定位）
+     * 已被 Sprint 3 逻辑光标模型（collectBlocks / domToLogicalCursor / logicalCursorToDom /
+     * blockIndexToSrcLine）取代并删除——文字指纹身份违反审查 #82 规则 4，详见 ADR-005。
      */
-    /** v1.92：光标 li 的自有文本指纹——摘掉后代 li、去全部空白。
-     *  caretSourcePos 的「li 索引→源码行号」累计在混合文档（无序+有序懒延续+任务）
-     *  上会偏移（真机实锤：操作有序「第二步」却减缩进了无序「地道」），行号只能当
-     *  提示用，动手前必须用文本锚定校验。 */
-    function liOwnText(li) {
-        var clone = li.cloneNode(true);
-        var descs = clone.querySelectorAll('li');
-        for (var d = 0; d < descs.length; d++) descs[d].remove();
-        var cbs = clone.querySelectorAll('input');
-        for (var c = 0; c < cbs.length; c++) cbs[c].remove();
-        return (clone.textContent || '').replace(/\s+/g, '');
-    }
 
-    /** 剥掉行首 marker 与空白后的行内容（用于与 liOwnText 精确比对）。 */
-    function lineCoreText(L) {
-        return String(L).replace(/^\s*(?:[-*+]\s+(?:\[[ xX]\]\s?)?|\d+\.\s)/, '').replace(/\s+/g, '');
-    }
-
-    /** v1.94：按 li 文字指纹定位源码行——ownText 是第 idx 个同名 li，
-     *  取源码里第 idx 个 lineCoreText 一致的列表行（DOM 序==源码序，多处同名也精确命中）。
-     *  找不到返回 -1，调用方放弃不动。 */
-    function findSourceLineByLi(ownText, idx, lines, MARK) {
-        if (!ownText || idx < 1) return -1;
-        var c = 0;
-        for (var j = 0; j < lines.length; j++) {
-            if (MARK.test(lines[j]) && lineCoreText(lines[j]) === ownText) {
-                c++;
-                if (c === idx) return j;
-            }
-        }
-        return -1;
-    }
-
-    /** v1.92：光标 li 的自有文本指纹——摘掉后代 li、去全部空白。    /**
+    /**
      * v1.86：缩进用的「当前块」判定——块首归位、分支判定、段落减缩进三处共用。规则：
      *  1) 列表优先：光标在 li 内（含 li 内嵌文本/多行续写）一律返回该 li，按列表处理，
      *     不会因 li 内出现的 P/BLOCKQUOTE 等被误判成段落；
