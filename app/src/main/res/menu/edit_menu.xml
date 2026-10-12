@@ -9,15 +9,18 @@
         android:icon="@drawable/ic_eye"
         android:title="@string/action_toggle_render"
         app:showAsAction="always" />
+    <!-- 撤回/前进：初始禁用，点亮由 EditorController 轮询 d.u/d.r（PM history 栈深）驱动 -->
     <item
         android:id="@+id/action_undo"
         android:icon="@drawable/ic_undo"
         android:title="@string/action_undo"
+        android:enabled="false"
         app:showAsAction="always" />
     <item
         android:id="@+id/action_redo"
         android:icon="@drawable/ic_redo"
         android:title="@string/action_redo"
+        android:enabled="false"
         app:showAsAction="always" />
     <item
         android:id="@+id/action_font"

@@ -7,11 +7,16 @@ import org.json.JSONObject
 /**
  * 撤回 / 前进历史（审查 #17 Sprint 5：EditorHistoryController）。
  *
- * 单一职责：维护「栈顶=当前状态」的撤销/前进双栈，词级合并连续打字，
+ * v1.103 起**退役**：ProseMirror 内核自带 PM history（WebView 内直通
+ * editor.undo()/redo()，粒度由 PM 事务决定），本类不再被 EditActivity 装配，
+ * 文件保留一个版本周期（对齐 Vditor 资产的退役节奏），v1.104 删除。
+ *
+ * 旧职责：维护「栈顶=当前状态」的撤销/前进双栈，词级合并连续打字，
  * 回放时把全文 + 光标推回 WebView。所有会触发内容变化的上游（打字、
  * 结构变换、粘贴）统一经 [onContentChanged] / [commitSnapshot] 落栈 ——
  * Sprint 4 #82-7 的单一历史栈就在这里，别处不得自建栈。
  */
+@Deprecated("v1.103 ProseMirror 内核改用 PM history 直通，本类不再装配")
 class EditorHistoryController(
     private val a: EditActivity,
     private val state: EditorState

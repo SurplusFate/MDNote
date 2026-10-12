@@ -16,3 +16,6 @@ build_v*.log
 
 # 交付用 git bundle 增量包（非源码，不入仓）
 *.bundle
+
+# 内核 npm 依赖（锁定文件入仓，目录不入）
+editor/node_modules/

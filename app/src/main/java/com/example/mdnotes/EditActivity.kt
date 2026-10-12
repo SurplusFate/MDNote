@@ -51,8 +51,11 @@ import org.json.JSONTokener
  * ├── EditorController       JS 通道、下行校准、主题/工具栏配置、渲染模式
  * ├── EditorImeController    键盘检测、悬浮闩锁、垫底 padding、自动回预览、轮询
  * ├── EditorImageController  内嵌图存储/供流/导入/看图
- * ├── EditorHistoryController 撤销/前进单一历史栈（Sprint 4 #82-7）
  * └── EditorDiagnostics      insets/桥诊断日志、调试浮层
+ *
+ * v1.103（ProseMirror 内核）：撤销/前进改为 WebView 内 PM history 直通
+ * （editor.undo()/redo()），Kotlin 快照栈 EditorHistoryController 退役不再装配；
+ * 顶栏按钮点亮由轮询 d.u/d.r（undoDepth/redoDepth）驱动。
  * ```
  */
 class EditActivity : AppCompatActivity() {
@@ -67,7 +70,6 @@ class EditActivity : AppCompatActivity() {
     internal lateinit var editor: EditorController
     internal lateinit var ime: EditorImeController
     internal lateinit var image: EditorImageController
-    internal lateinit var history: EditorHistoryController
     internal lateinit var diag: EditorDiagnostics
 
     private var noteId: Long = MainActivity.NEW_NOTE
@@ -94,7 +96,6 @@ class EditActivity : AppCompatActivity() {
         diag = EditorDiagnostics(this)
         ime = EditorImeController(this, state, diag)
         image = EditorImageController(this, state)
-        history = EditorHistoryController(this, state)
         editor = EditorController(this, state, diag)
         ime.setPollHook { editor.pollJsState() }
 
@@ -127,8 +128,8 @@ class EditActivity : AppCompatActivity() {
         binding.toolbar.setOnMenuItemClickListener {
             when (it.itemId) {
                 R.id.action_toggle_render -> { editor.toggleRenderMode(); true }
-                R.id.action_undo -> { history.undoEdit(); true }
-                R.id.action_redo -> { history.redoEdit(); true }
+                R.id.action_undo -> { editor.undo(); true }
+                R.id.action_redo -> { editor.redo(); true }
                 R.id.action_font -> { showFontSizeDialog(); true }
                 R.id.action_delete -> { delete(); true }
                 else -> false
@@ -141,7 +142,6 @@ class EditActivity : AppCompatActivity() {
         editor.buildBootstrapThemeCss()
         initWebView()
         setupKeyboardBar()
-        history.setupHistory()
         setupBackHandler()
         // v1.36：格式化改由 Vditor 自带工具栏负责，隐藏原生格式栏避免重复。
         // v1.43：原生键盘辅助栏（含收起键盘键）整体移除——Web 工具栏随键盘
@@ -170,8 +170,6 @@ class EditActivity : AppCompatActivity() {
     /** 离开页面就保存，不用手动点保存 */
     override fun onPause() {
         ime.stopPolling()   // 页面不可见，停轮询
-        // 把还没落栈的输入补上，免得刚打的字撤不回来
-        history.commitSnapshot()
         if (!deleted && state.dirty) {   // Sprint 4 #64：只有脏了才落盘，统一返回/后台/重建判断
             save()
             // 双保险：JS 侧编辑中的块在 visibilitychange 已即时上报；
@@ -299,9 +297,19 @@ class EditActivity : AppCompatActivity() {
 
     // ---------- JS 事件路由（EditorBridge post 回主线程后调用） ----------
 
-    /** JS 上报全文 + 光标：更新状态镜像并记撤销快照（职责在 EditorHistoryController） */
+    /**
+     * JS 上报全文 + 光标：更新状态镜像（v1.103 撤销快照栈退役，
+     * PM history 全权接管撤销粒度，这里只负责内容真源镜像）。
+     */
     fun onJsContentChanged(text: String, caret: Int) {
-        history.onContentChanged(text, caret)
+        state.content = text
+        state.caret = caret
+    }
+
+    /** PM history 栈深度 → 顶栏撤回/前进按钮点亮（EditorController 轮询回调） */
+    internal fun updateHistoryButtons(undoDepth: Int, redoDepth: Int) {
+        binding.toolbar.menu.findItem(R.id.action_undo)?.isEnabled = undoDepth > 0
+        binding.toolbar.menu.findItem(R.id.action_redo)?.isEnabled = redoDepth > 0
     }
 
     /** 进入/退出编辑态：驱动 IME 补刀、历史菜单与轮询/键盘联动 */
@@ -322,7 +330,6 @@ class EditActivity : AppCompatActivity() {
                 }
             }, 200)
         }
-        history.updateHistoryMenu()
         // 轮询是 editing / 键盘状态的唯一可靠来源（本机 JS→Kotlin 桥已死）。
         // 绝不能因退出编辑而停 —— 否则再点进编辑态 editing 永远 false，
         // 工具栏再不出现。持续运行：onCreate/onResume 启动、onPause 停止。
@@ -368,8 +375,6 @@ class EditActivity : AppCompatActivity() {
                 "openUrl" -> onJsOpenUrl(ev.optString("a"))
                 "viewImage" -> image.onJsViewImage(ev.optString("a"))
                 "pickImage" -> image.onJsPickImage()
-                "undo" -> history.undoEdit()   // Sprint 4 #82-7：格式栏撤销按钮统一走 Kotlin 历史栈
-                "redo" -> history.redoEdit()
             }
         }
     }

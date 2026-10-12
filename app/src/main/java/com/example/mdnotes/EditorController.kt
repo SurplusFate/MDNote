@@ -69,6 +69,10 @@ class EditorController(
             }
             diag.recordProbe(obj.optJSONObject("probe"))
             diag.updateJsDiag(obj.optJSONObject("d"))
+            // PM history 栈深度 → 顶栏撤回/前进按钮点亮（d.u/d.r，v1.103）
+            obj.optJSONObject("d")?.let { d ->
+                a.updateHistoryButtons(d.optInt("u", 0), d.optInt("r", 0))
+            }
             a.drainJsEvents(obj.optJSONArray("q"))
             if (obj.optBoolean("e", false)) {
                 if (!state.editing) {
@@ -91,6 +95,11 @@ class EditorController(
     fun exitEdit() {
         a.binding.editorWeb.evaluateJavascript("editor.exitEditMode()", null)
     }
+
+    // ---------- 撤回 / 前进（v1.103 直通 PM history，Kotlin 快照栈退役） ----------
+
+    fun undo() = js("editor.undo()")
+    fun redo() = js("editor.redo()")
 
     // ---------- 渲染模式 ----------
 
