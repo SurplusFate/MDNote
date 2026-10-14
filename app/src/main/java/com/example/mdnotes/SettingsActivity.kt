@@ -40,6 +40,7 @@ class SettingsActivity : AppCompatActivity() {
         binding.chkDebug.isChecked = DebugPref.enabled(this)
         binding.rowDebug.setOnClickListener { binding.chkDebug.toggle() }
         binding.chkDebug.setOnCheckedChangeListener { _, checked ->
+            AppLog.i("Settings", "debugLog=$checked")
             DebugPref.save(this, checked)
         }
 
@@ -59,6 +60,7 @@ class SettingsActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             Config.save(this, url, user, pwd)
+            AppLog.i("Settings", "webdav save url=$url user=$user")
             toast(getString(R.string.toast_saved_sync))
             finish()
         }
@@ -99,6 +101,7 @@ class SettingsActivity : AppCompatActivity() {
                 val sp = p + Appearance.MIN_SP
                 spLabel.text = "$sp sp"
                 Appearance.saveTextSize(this@SettingsActivity, sp)
+                AppLog.i("Settings", "textSize=$sp")
                 refreshAppearanceValues()
             }
             override fun onStartTrackingTouch(sb: SeekBar?) = Unit
@@ -119,6 +122,7 @@ class SettingsActivity : AppCompatActivity() {
             .setTitle(R.string.row_font_family)
             .setSingleChoiceItems(names, checked) { d, which ->
                 Appearance.saveFamily(this, Appearance.families[which].first)
+                AppLog.i("Settings", "family=${Appearance.families[which].first}")
                 refreshAppearanceValues()
                 d.dismiss()
             }
@@ -134,6 +138,7 @@ class SettingsActivity : AppCompatActivity() {
             .setSingleChoiceItems(names, checked) { d, which ->
                 val mode = Appearance.themes[which].first
                 Appearance.saveTheme(this, mode)
+                AppLog.i("Settings", "theme=$mode")
                 AppCompatDelegate.setDefaultNightMode(mode)   // 立即生效：活动自动重建
                 d.dismiss()
             }
@@ -163,12 +168,14 @@ class SettingsActivity : AppCompatActivity() {
             }
             result
                 .onSuccess { content ->
+                    AppLog.i("Settings", "testConnection ok empty=${content == null}")
                     toast(
                         if (content == null) getString(R.string.webdav_empty)
                         else getString(R.string.webdav_has_data)
                     )
                 }
                 .onFailure { e ->
+                    AppLog.w("Settings", "testConnection fail: ${e.message}")
                     val msg = e.message ?: ""
                     toast(
                         when {

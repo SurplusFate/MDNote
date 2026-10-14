@@ -26,6 +26,7 @@ import {
 import { buildInputRules } from './inputrules.js';
 import { createToolbar } from './toolbar.js';
 import { DEFAULT_TOOLS, icon } from './icons.js';
+import katex from 'katex';
 
 const IMG_SRC_PREFIX = 'img://';
 
@@ -102,9 +103,33 @@ function rawView(node) {
   return { dom, stopEvent: () => true };
 }
 
+// ---- 公式 NodeView：KaTeX 渲染（离线，字体由 editor.html 引入的 katex.min.css 提供） ----
+// 渲染失败（语法错误）时退回纯文本原文，绝不静默消失。
+
+function mathView(node) {
+  const disp = node.type.name === 'math_block';
+  const dom = document.createElement(disp ? 'div' : 'span');
+  dom.className = disp ? 'md-math-block' : 'md-math-inline';
+  const latex = node.attrs.latex || '';
+  try {
+    dom.innerHTML = katex.renderToString(latex, {
+      displayMode: disp,
+      throwOnError: false,
+      output: 'htmlAndMathml',
+      trust: false,
+      strict: false,
+    });
+  } catch (e) {
+    dom.textContent = (disp ? '$$' : '$') + latex + (disp ? '$$' : '$');
+  }
+  return { dom, stopEvent: () => true };
+}
+
 const nodeViews = {
   table_block: rawView,
   raw_block: rawView,
+  math_block: mathView,
+  math_inline: mathView,
 };
 
 // ---- EditorState 装配 ----
@@ -112,28 +137,301 @@ const nodeViews = {
 /** 撤销/前进历史插件：模块级单例，桥据此上报栈深度（顶栏按钮点亮） */
 const historyPlugin = history();
 
-function makeState(src) {
+// 鲁棒地取「文档末尾 text 选区」：文档以 atom/NodeView（math_block/raw_block/
+// table_block 等）结尾时，TextSelection.atEnd 可能抛异常或落在非法边界；
+// 逐字符倒退寻找最后一个合法 text 位置，找不到才退回开头(pos 1)。
+// 这是「打开/重载笔记本该在末尾、却跳到开头」的关键兜底——旧实现 atEnd
+// 失败时直接保留默认开头选区(pos 1)，遇到 atom 结尾笔记必现。
+function endSelection(doc) {
+  try { return TextSelection.atEnd(doc); } catch (e) {
+    console.warn('[caret] TextSelection.atEnd failed (atom/NodeView end?), fallback near-end: ' + (e && e.message));
+  }
+  for (let p = doc.content.size; p >= 1; p--) {
+    try { return TextSelection.create(doc, p); } catch (e) { /* try prev */ }
+  }
+  console.warn('[caret] no valid end position found, using start(pos 1)');
+  return TextSelection.create(doc, 1);
+}
+
+function makeState(src, sel) {
   const doc = safe(() => parser.parse(src || '')) || emptyParagraph();
-  return EditorState.create({
+  let state = EditorState.create({
     doc,
     plugins: [historyPlugin, taskTogglePlugin, buildInputRules(schema), keymap(buildKeymap(schema))],
   });
+  // 载入后把光标放到末尾（用户预期「打开笔记接着写」在末尾）。
+  // sel 为 ProseMirror 文档位置（doc 字符数）：Kotlin 经 loadMarkdown/enterEditAt 传入；
+  // 合法且落在文档内则落到该位置，否则落到文档末尾（鲁棒，见 endSelection）。
+  try {
+    if (sel && Number.isFinite(sel) && sel > 0) {
+      const pos = Math.max(1, Math.min(Math.floor(sel), doc.content.size - 1));
+      state = state.apply(state.tr.setSelection(TextSelection.create(doc, pos)));
+    } else {
+      state = state.apply(state.tr.setSelection(endSelection(doc)));
+    }
+  } catch (e) {
+    console.warn('[caret] makeState selection failed, keep default (start): ' + (e && e.message));
+  }
+  return state;
+}
+
+// v1.110：描述一次点击命中的语义元素（用于 [caret] click 打点）
+function describeHit(node) {
+  if (!node || !node.closest) return 'none';
+  const c = node.classList || {};
+  if (c.contains && c.contains('md-math-inline')) return 'math-inline';
+  if (c.contains && c.contains('md-math-block')) return 'math-block';
+  if (c.contains && c.contains('md-task-box')) return 'task-box';
+  if (node.tagName === 'IMG') return 'image';
+  if (node.tagName === 'A') return 'link';
+  if (node.closest('table')) return 'table';
+  if (node.closest('li.md-task')) return 'task-item';
+  if (node.closest('LI')) return 'list-item';
+  if (node.closest('BLOCKQUOTE')) return 'quote';
+  if (node.closest('PRE')) return 'code-block';
+  if (node.closest('H1,H2,H3,H4,H5,H6')) return 'heading';
+  if (node.closest('P')) return 'paragraph';
+  return (node.tagName || 'node').toLowerCase();
+}
+
+// 返回 pos 所在文本块（段落/列表项正文等）的起始位置，用作「落在哪一行」的块标识。
+// 跨块校正时用它判断是否落错了行/项。
+function blockStart(doc, pos) {
+  try {
+    const $ = doc.resolve(Math.min(Math.max(pos, 0), doc.content.size));
+    for (let d = $.depth; d > 0; d--) {
+      if ($.node(d).isTextblock) return $.before(d);
+    }
+  } catch (_) {}
+  return -1;
+}
+
+// ============================================================
+// v1.117：Android WebView 在「文本右侧空白带」点按时，原生命中测试
+// (caretRangeFromPoint / caretPositionFromPoint / ProseMirror 的 posAtCoords) 会把光标
+// 误翻到上一块的行首（社区通病：MDN 的 caretRangeFromPoint 文档、php.cn/faq/3050250、
+// bbccb.com 的 contenteditable 光标文章均记载此现象，Quill/wangEditor/Tiptap 移动端编辑
+// 器都有同类反馈）。下面用「几何夹 x」思路纠正：找到点按所在视觉行文本的右缘，若点击 x 落在
+// 其右侧，就把探测 x 夹回行内再交给 PM 重探，使光标稳定落在本行行尾，而不是翻到上一块行首。
+// ============================================================
+const TEXTBLOCK_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, code';
+
+function safePosAtCoords(view, x, y) {
+  try {
+    const a = view.posAtCoords({ left: x, top: y });
+    return a && a.pos != null ? a.pos : null;
+  } catch (_) { return null; }
+}
+
+// 找到 (x,y) 处最内层承载文本的元素（处理 flex 任务项、列表嵌套等层级）
+function innermostTextblockAt(view, x, y) {
+  let el = null;
+  try { el = document.elementFromPoint(x, y); } catch (_) {}
+  if (!el || !view.dom.contains(el)) el = null;
+  // 直接命中的是容器时，按 y 在顶层块里找
+  if (!el || el === view.dom) {
+    for (const child of view.dom.children) {
+      const rr = child.getBoundingClientRect();
+      if (y >= rr.top - 2 && y <= rr.bottom + 2) { el = child; break; }
+    }
+  }
+  if (!el || el === view.dom) return null;
+  // 列表容器下钻到 y 所在的 li
+  if (el.nodeName === 'OL' || el.nodeName === 'UL') {
+    let target = null;
+    for (const c of el.children) {
+      const rr = c.getBoundingClientRect();
+      if (y >= rr.top - 2 && y <= rr.bottom + 2) { target = c; break; }
+    }
+    el = target || el;
+  }
+  const inner = el.querySelector ? el.querySelector(TEXTBLOCK_SELECTOR) : null;
+  return inner || el;
+}
+
+// 纠正「右侧空白带」点按的命中错误。
+//  返回 { pos, native, gutter }
+//   pos    : 几何纠正后的真实意图位置（gutter 时为本行行尾）
+//   native : PM 原生命中位置（可能已误翻到上一块行首）
+//   gutter : 是否命中「右侧空白带」误判（native 与纠正结果不一致）
+function resolveTapPos(view, x, y) {
+  const native = safePosAtCoords(view, x, y);
+  const block = innermostTextblockAt(view, x, y);
+  if (!block) return { pos: native, native, gutter: false };
+  // 用 Range 覆盖块内联内容取「文本行盒」：每行真实文字宽度的右缘（Element.getClientRects
+  // 返回的是块级边框盒=整行满宽，无法区分文字与右侧空白，故必须走 Range）。
+  let rects = [];
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(block);
+    rects = Array.from(range.getClientRects());
+  } catch (_) {}
+  if (!rects.length) return { pos: native, native, gutter: false };
+  // 找包含 y 的视觉行（取竖带最接近的一行）
+  let best = null, bestDist = Infinity;
+  for (const r of rects) {
+    if (y >= r.top - 2 && y <= r.bottom + 2) { best = r; break; }
+    const mid = (r.top + r.bottom) / 2;
+    const d = Math.abs(y - mid);
+    if (d < bestDist) { bestDist = d; best = r; }
+  }
+  if (!best) return { pos: native, native, gutter: false };
+  // 点击落在该视觉行文本右缘右侧（右侧空白带）→ 夹 x 到行内重探
+  if (x > best.right + 4) {
+    const cx = Math.max(best.left + 2, best.right - 2);
+    const fixed = safePosAtCoords(view, cx, y);
+    if (fixed != null) return { pos: fixed, native, gutter: fixed !== native };
+  }
+  return { pos: native, native, gutter: false };
 }
 
 function makeView(place, src) {
+  // 用户最近一次点按位置（pointerdown 时算）——作为"用户真实意图"的基准，用于把被
+  // WebView 误重置到开头的光标拉回。
+  let tapPos = -1, tapBlock = -2, tapT = 0, tapRawPos = null, tapGutter = false;
   const st = makeState(src);
   const v = new EditorView(place, {
     state: st,
     nodeViews,
     attributes: { spellcheck: 'false' },
     dispatchTransaction(tr) {
+      const prevHead = v.state.selection.head;
       v.updateState(v.state.apply(tr));
       afterTransaction(v);
+      // v1.115 修复（根因已在浏览器 harness 证实）：Android WebView 点按时会把 DOM 选区
+      // 重置到文档开头，PM 的 domObserver 将这个外部重置"采纳"成逻辑选区，导致光标偶发跳到
+      // 开头。这里抓住"逻辑光标被瞬移进首块"的瞬间，用用户最近一次真实点按的位置拉回。
+      // 仅在「跳进首块 + 之前不在首块 + 最近点按的不是首块」时触发：正常点首行、拖选、
+      // 键盘编辑都不满足，绝不会误伤。
+      try {
+        const s = v.state.selection;
+        if (s.head !== prevHead) {
+          const firstBlock = blockStart(v.state.doc, 1);
+          const nowBlock = blockStart(v.state.doc, s.head);
+          const wasBlock = blockStart(v.state.doc, prevHead);
+          if (nowBlock === firstBlock && wasBlock !== firstBlock && wasBlock >= 0 &&
+              tapBlock >= 0 && tapBlock !== firstBlock && (Date.now() - tapT) < 3000 &&
+              tapPos >= 0 && blockStart(v.state.doc, tapPos) !== firstBlock) {
+            const fix = v.state.tr.setSelection(TextSelection.create(v.state.doc, tapPos));
+            v.updateState(v.state.apply(fix));
+            console.warn('[caret] webview-reset reverted ' + prevHead + '->' + s.head + ' back to tap ' + tapPos);
+          }
+        }
+      } catch (_) {}
+      // v1.117：纠正 WebView 对「右侧空白带」点按的命中错误。
+      // 用户在某视觉行右侧空白区点按时，原生 posAtCoords 会把光标翻到上一块行首；
+      // pointerdown 已用几何方式算出了真实意图位置（tapPos = 本行行尾）。若 PM 把光标放到了
+      // 与 tapBlock 不同的块，且本次点按确属右侧空白带误判（tapGutter），则拉回到 tapPos。
+      // 仅对「点按」（结果为折叠光标）生效，拖选/长按产生的选区不触发，避免误伤。
+      try {
+        const s2 = v.state.selection;
+        if (s2.empty && tapGutter && tapRawPos != null && tapBlock >= 0 &&
+            (Date.now() - tapT) < 1000) {
+          const headBlock = blockStart(v.state.doc, s2.head);
+          if (headBlock !== tapBlock) {
+            const fix = v.state.tr.setSelection(TextSelection.create(v.state.doc, tapPos));
+            v.updateState(v.state.apply(fix));
+            console.warn('[caret] right-gutter hit corrected ' + s2.head + ' -> ' + tapPos + ' (tapBlock ' + tapBlock + ')');
+          }
+        }
+      } catch (_) {}
     },
   });
+  // 最终保险：直接在 .ProseMirror 元素上设 inline white-space，确保 ProseMirror 读取
+  // getComputedStyle(view.dom).whiteSpace 一定为 pre-wrap（任何 CSS 注入/嵌套都覆盖不了），
+  // 否则 coordsAtPos / 命中测试在软换行处坐标错乱，光标跳到开头或折行处乱跳。
+  v.dom.style.whiteSpace = 'pre-wrap';
+  v.dom.style.overflowWrap = 'break-word';
   // editing 真源：PM DOM 的 focus/blur（替代 Vditor 的 options.focus/blur 回调）
-  v.dom.addEventListener('focus', () => { editing = true; safe(() => dockUpdate()); });
+  v.dom.addEventListener('focus', () => {
+    editing = true;
+    safe(() => dockUpdate());
+    // v1.110：DOM focus 在「文档以 atom/NodeView（math_block/raw_block/table）结尾」时，
+    // 浏览器无法在 atom 末尾放置 DOM caret，会把光标顶到文档开头，再被 ProseMirror
+    // 同步成 selection=开头。若 focus 前在非开头、focus 后被顶开头，则恢复并打点。
+    const bef = v.state.selection.head;
+    requestAnimationFrame(() => {
+      const aft = v.state.selection.head;
+      if (bef > 1 && aft <= 1) {
+        try {
+          v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, bef)));
+          console.warn('[caret] focus pulled caret to start, restored to ' + bef);
+        } catch (e) {
+          console.warn('[caret] focus restore failed: ' + (e && e.message));
+        }
+      }
+    });
+  });
   v.dom.addEventListener('blur', () => { editing = false; safe(() => dockUpdate()); });
+  // v1.115：pointerdown 记录用户真实点按位置（供上面的 webview-reset 回退使用）。
+  // v1.117：此处用几何纠正后的位置，原生命中在「右侧空白带」被误翻到上一块行首时，
+  // 这里记录的是本行行尾（tapGutter 标记这次点按确实属于该误判场景）。
+  v.dom.addEventListener('pointerdown', (e) => {
+    tapT = Date.now();
+    const r = resolveTapPos(v, e.clientX, e.clientY);
+    tapRawPos = r.native;   // PM 原生命中（可能误翻到上一块行首）
+    tapPos = r.pos;         // 几何纠正后的真实意图位置（本行行尾）
+    tapGutter = r.gutter;   // 是否命中「右侧空白带」误判
+    tapBlock = (r.pos >= 0) ? blockStart(v.state.doc, r.pos) : -2;
+  });
+
+  // ============================================================
+  // v1.116 防误选（根因有录屏逐帧证据）：快速连点时第二击落入系统双击窗口，
+  // WebView 触发"双击选词"——选区+左右手柄+「剪切/复制/粘贴/全选」菜单全弹出，
+  // 且 IME 随之切面板。后果：菜单开着时后续点按被吃掉（光标"不灵敏"）；
+  // 选区收起时光标落到行首而非点按处（"点行尾跑到行首"）。
+  // 两道防线，均不影响长按选词与拖选手势：
+  //  1) detail>1（双击/三连击）的 mousedown 直接拦截，不让选词手势成立，
+  //     并手动把光标放到本次点按位置——连点移动光标依然跟手；
+  //  2) 兜底：一次"短触摸"（<250ms，即点按而非长按）结束后短暂窗口内，
+  //     若冒出非空选区（双击/微动误选），立即收回到该次点按的位置。
+  // ============================================================
+  let touchDownT = 0, touchDurMs = 0, touchActive = false, lastTapEndT = 0;
+  let lastTapX = -1, lastTapY = -1, selGuard = 0;
+  const collapseAccidental = () => {
+    if (selGuard) return;
+    selGuard = setTimeout(() => {
+      selGuard = 0;
+      try {
+        if (!editing || touchActive) return;
+        if (Date.now() - lastTapEndT > 350) return;
+        const s = v.state.selection;
+        if (s.empty) return;
+        let p = s.head;
+        if (lastTapX >= 0) {
+          const rr = resolveTapPos(v, lastTapX, lastTapY);
+          if (rr && rr.pos != null) p = rr.pos;
+        }
+        v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, p)));
+        console.warn('[caret] accidental selection collapsed to ' + p);
+      } catch (_) {}
+    }, 60);
+  };
+  v.dom.addEventListener('touchstart', (e) => {
+    touchActive = true;
+    touchDownT = Date.now();
+    if (e.touches && e.touches.length) { lastTapX = e.touches[0].clientX; lastTapY = e.touches[0].clientY; }
+  }, { passive: true });
+  v.dom.addEventListener('touchend', () => {
+    touchActive = false;
+    touchDurMs = Date.now() - touchDownT;
+    lastTapEndT = Date.now();
+    collapseAccidental();
+  }, { passive: true });
+  v.dom.addEventListener('touchcancel', () => { touchActive = false; }, { passive: true });
+  v.dom.addEventListener('mousedown', (e) => {
+    if (e.detail > 1) {
+      e.preventDefault();
+      const x = e.clientX, y = e.clientY;
+      setTimeout(() => {
+        try {
+          const rr = resolveTapPos(v, x, y);
+          if (rr && rr.pos != null) v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, rr.pos)));
+        } catch (_) {}
+      }, 0);
+    }
+  }, true);
+  document.addEventListener('selectionchange', collapseAccidental);
   return v;
 }
 
@@ -465,10 +763,13 @@ window.editor = {
     pendingValue = src || '';
     if (view && ready) {
       const wasEditing = editing;
-      const st = makeState(pendingValue);
+      const st = makeState(pendingValue, sel);
       view.updateState(st);
       afterTransaction(view);
       if (keepEditing && wasEditing) { editing = true; safe(() => view.focus()); }
+      console.log('[caret] loadMarkdown sel=' + sel + ' cursor=' + view.state.selection.head + ' size=' + st.doc.content.size);
+    } else {
+      console.log('[caret] loadMarkdown deferred (not ready), pending sel=' + sel);
     }
   },
   getSource: getSource,
@@ -491,7 +792,7 @@ window.editor = {
     return {
       e: editing,
       s: getSource(),
-      c: 0,
+      c: view ? view.state.selection.head : 0,
       d: {
         en: indentOps.en, ok: indentOps.ok, er: indentOps.er, id: indentDiag,
         u: view ? undoDepth(view.state) : 0,
@@ -520,8 +821,11 @@ window.editor = {
       safe(() => dockUpdate());
       return;
     }
-    if (view && ready) { editing = true; safe(() => view.focus()); }
-    else pendingFocus = true;
+    if (view && ready) {
+      editing = true;
+      safe(() => view.focus());
+      console.log('[caret] enterEditAt sel=' + sel + ' cursor=' + view.state.selection.head);
+    } else pendingFocus = true;
   },
   /** 主题落地：注入 CSS 变量 + 昼夜类切换 + 字号 */
   applyTheme: function (vars) {
@@ -624,6 +928,16 @@ window.editor = {
   /** 按当前配置重建工具栏（设置返回编辑页时由 Kotlin 调用） */
   rebuildToolbar: function () { if (toolbar) toolbar.rebuild(); },
 };
+
+// v1.117 headless 回归钩子：仅当显式置位 window.__MDNOTE_DEBUG__ 时暴露内部函数，
+// 用于验证「右侧空白带」命中纠正（见 test/caret-gutter.test.js）。生产环境永不触发。
+if (typeof window !== 'undefined' && window.__MDNOTE_DEBUG__) {
+  window.__mdnoteDebug = {
+    resolveTapPos, blockStart,
+    getView: () => view,
+    makeState, schema,
+  };
+}
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', boot);

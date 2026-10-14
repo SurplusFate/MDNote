@@ -4,6 +4,8 @@
     <meta charset="utf-8">
     <!-- user-scalable=no：禁掉双击/捏合缩放，编辑时光标坐标才不会和视觉错位 -->
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <!-- KaTeX 离线公式渲染（CSS 引用同目录 katex/ 下的字体，file://android_asset 直接取） -->
+    <link rel="stylesheet" href="katex/katex.min.css">
     <!-- v1.103 ProseMirror 内核版：Vditor CSS/lute/i18n/sprite（旧版 1900+ 行内联资产）全部移除。
          内核 = pm/editor-pm.dist.js（esbuild 单文件 IIFE，无任何运行时网络请求）。
          Kotlin 侧 EditorController.shouldInterceptRequest 仍按 "editor.html" 文件名拦截本文件，
@@ -29,7 +31,17 @@ html, body { height: 100%; margin: 0; padding: 0; background: var(--bg-page, #f7
 
 /* ===================== 编辑区（ProseMirror） ===================== */
 #md-pm-host { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+/* 关键：ProseMirror 要求编辑根节点 white-space: pre-wrap，否则 coordsAtPos / 命中
+   测试在软换行处测量的行盒与浏览器实际渲染不一致，光标在折行处跳动、点击定位偏。
+   v1.103 换 PM 内核时漏了 prosemirror.css 的这条设置（Vditor 自带），现补回。 */
 #md-pm-host > .ProseMirror { flex: 1 1 auto; }
+/* 关键：ProseMirror 要求编辑根节点 white-space: pre-wrap，否则 coordsAtPos / 命中
+   测试在软换行处测量的行盒与浏览器实际渲染不一致，光标在折行处跳动、点击定位偏、
+   打开笔记时光标被画到开头（逻辑在末尾，但坐标算错画错位）。
+   v1.103 换 PM 内核时漏了 prosemirror.css 的这条设置（Vditor 自带），现补回。
+   用类选择器 + !important 兜底，确保任何注入/嵌套都不覆盖；makeView 还会再设一次
+   inline style 作为最终保险（见 bridge.js）。 */
+.ProseMirror { white-space: pre-wrap !important; overflow-wrap: break-word; }
 .md-content {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -105,20 +117,24 @@ html, body { height: 100%; margin: 0; padding: 0; background: var(--bg-page, #f7
 .ProseMirror a { color: var(--brand, #ff6f00); text-decoration: none; }
 .ProseMirror strong { font-weight: 700; }
 
-/* 任务列表 checkbox（视觉；点击切换由 bridge 的 taskTogglePlugin 处理） */
-.ProseMirror li.md-task { list-style: none; position: relative; }
+/* 任务列表 checkbox（视觉；点击切换由 bridge 的 taskTogglePlugin 处理）
+   结构：li.md-task > span.md-task-box + span.md-task-body > p
+   .md-task-body 独占内容孔，避免 "Content hole must be the only child" */
+.ProseMirror li.md-task { list-style: none; position: relative; display: flex; align-items: flex-start; }
 .ProseMirror ul > li.md-task { margin-left: -1.2em; }
 .md-task-box {
   display: inline-block;
+  flex: 0 0 auto;
   width: 15px; height: 15px;
   box-sizing: border-box;
-  margin-right: 6px;
+  margin: 0.22em 6px 0 0;
   border: 1.5px solid var(--text-sub, #8E8E93);
   border-radius: 4px;
-  vertical-align: -2px;
   position: relative;
   user-select: none;
 }
+.md-task-body { flex: 1 1 auto; min-width: 0; }
+.md-task-body p { margin: 0; }
 li.md-task--on > .md-task-box {
   background: var(--brand, #ff6f00);
   border-color: var(--brand, #ff6f00);
@@ -132,6 +148,11 @@ li.md-task--on > .md-task-box::after {
   border-width: 0 2px 2px 0;
   transform: rotate(42deg);
 }
+
+/* KaTeX 公式（离线渲染；字体由 katex.min.css 提供） */
+.ProseMirror .md-math-inline { }
+.ProseMirror .md-math-block { margin: 0.6em 0; overflow-x: auto; }
+.ProseMirror .md-math-block .katex-display { margin: 0; }
 
 /* raw 透传块（表格 / HTML 块）：只读渲染，编辑走源码态 */
 .ProseMirror .md-raw[data-md-raw] {

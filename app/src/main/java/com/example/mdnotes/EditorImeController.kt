@@ -70,10 +70,14 @@ class EditorImeController(
 
     /** 轮询启停（onCreate/onResume 启动，onPause 停止） */
     fun startPolling() {
+        AppLog.d("Ime", "startPolling")
         imePollHandler.removeCallbacks(imePollTask)
         imePollTask.run()
     }
-    fun stopPolling() { imePollHandler.removeCallbacks(imePollTask) }
+    fun stopPolling() {
+        AppLog.d("Ime", "stopPolling")
+        imePollHandler.removeCallbacks(imePollTask)
+    }
 
     /**
      * v1.51：页面就绪时取实时键盘态并对齐边沿缓存（lastImeVisible）。
@@ -210,6 +214,7 @@ class EditorImeController(
             lastImeVisible = imeVisible
             lastFloatingPushed = floating
             lastImePushAt = SystemClock.elapsedRealtime()
+            AppLog.d("Ime", "onIme push vis=$imeVisible float=$floating edit=${state.editing}")
             // v1.64：推送只承载证据（JS 显隐由编辑态驱动）。(true,false)=普通
             // 键盘占高实证 → JS 工具栏立即入流；其余组合不影响 JS 显隐。
             a.editor.js("editor.onIme($imeVisible, $floating)")
@@ -218,6 +223,7 @@ class EditorImeController(
                 SystemClock.elapsedRealtime() - state.editingSince > EDIT_GRACE_MS
             ) {
                 imeExitHandler.removeCallbacks(imeExitTask)
+                AppLog.d("Ime", "schedule exitEdit (ime settled, no floating evidence)")
                 imeExitHandler.postDelayed(imeExitTask, IME_SETTLE_MS)
             } else {
                 imeExitHandler.removeCallbacks(imeExitTask)
@@ -294,6 +300,7 @@ class EditorImeController(
         diag.logRaw("D", visible, bottom)      // v1.65：记录每次真实分发帧
         if (!visible) return              // v1.67：伪帧/真收起帧均不翻闩锁
         floatingIme = bottom < FLOAT_IME_MAX_PX
+        AppLog.d("Ime", "dispatch vis=$visible b=$bottom -> floating=$floatingIme")
     }
 
     /**

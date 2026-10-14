@@ -36,6 +36,7 @@ class EditorController(
 
     /** 页面就绪装载笔记内容（onPageFinished 首次调用） */
     fun load(content: String) {
+        AppLog.d("Editor", "load len=${content.length}")
         a.binding.editorWeb.evaluateJavascript(
             "editor.loadMarkdown(${JSONObject.quote(content)}, 0, false)", null
         )
@@ -65,6 +66,7 @@ class EditorController(
                 null
             } ?: run {
                 diag.bumpPollBad()   // 解析失败计数：浮层可见，别再静默
+                AppLog.w("Editor", "pollJsState parse fail (bad package)")
                 return@evaluateJavascript
             }
             diag.recordProbe(obj.optJSONObject("probe"))
@@ -88,18 +90,20 @@ class EditorController(
 
     /** 进入编辑态并唤起键盘的统一入口（新建笔记自动编辑 / 点击正文由 JS 侧自行处理） */
     fun enterEditAt(caret: Int) {
+        AppLog.d("Editor", "enterEditAt caret=$caret")
         a.binding.editorWeb.evaluateJavascript("editor.enterEditAt($caret)", null)
     }
 
     /** 退出编辑态回预览（提交当前块） */
     fun exitEdit() {
+        AppLog.d("Editor", "exitEdit")
         a.binding.editorWeb.evaluateJavascript("editor.exitEditMode()", null)
     }
 
     // ---------- 撤回 / 前进（v1.103 直通 PM history，Kotlin 快照栈退役） ----------
 
-    fun undo() = js("editor.undo()")
-    fun redo() = js("editor.redo()")
+    fun undo() { AppLog.d("Editor", "undo"); js("editor.undo()") }
+    fun redo() { AppLog.d("Editor", "redo"); js("editor.redo()") }
 
     // ---------- 渲染模式 ----------
 
@@ -108,6 +112,7 @@ class EditorController(
 
     fun toggleRenderMode() {
         sourceMode = !sourceMode
+        AppLog.d("Editor", "toggleRenderMode -> sourceMode=$sourceMode")
         js("editor.toggleSourceMode()")
         a.binding.toolbar.menu.findItem(R.id.action_toggle_render)?.setIcon(
             if (sourceMode) R.drawable.ic_eye_off else R.drawable.ic_eye
@@ -163,11 +168,13 @@ class EditorController(
         val json = toolbarConfigJson()
         if (json == lastToolbarCfg) return
         lastToolbarCfg = json
+        AppLog.d("Editor", "pushToolbarConfig (changed)")
         js("editor.setToolbarConfig($json)")
     }
 
     fun applyTheme() {
-        if (!state.ready) return   // 页面没就绪：onPageFinished 会补一次
+        if (!state.ready) { AppLog.d("Editor", "applyTheme skip: not ready"); return }   // 页面没就绪：onPageFinished 会补一次
+        AppLog.d("Editor", "applyTheme")
         js("editor.applyTheme(${JSONObject(themeVarMap())})")
     }
 

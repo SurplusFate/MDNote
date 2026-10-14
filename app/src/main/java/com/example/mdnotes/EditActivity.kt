@@ -13,6 +13,9 @@ import android.view.inputmethod.InputMethodManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
+import android.util.Log
+import android.webkit.ConsoleMessage
+import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.SeekBar
@@ -103,12 +106,15 @@ class EditActivity : AppCompatActivity() {
         applyImmersiveStatusBar(binding.toolbar)
 
         noteId = intent.getLongExtra(EXTRA_ID, MainActivity.NEW_NOTE)
+        AppLog.i("Edit", "onCreate id=$noteId isNew=${noteId == MainActivity.NEW_NOTE}")
         val existing = try {
             NoteRepository.find(this, noteId)
         } catch (e: CorruptStorageException) {
+            AppLog.e("Edit", "load existing failed: corrupt", e)
             toast("数据文件损坏，已恢复上次备份")
             null
         }
+        AppLog.d("Edit", "loaded existing=${existing != null} len=${existing?.content?.length ?: 0}")
         if (existing == null && noteId != MainActivity.NEW_NOTE) {
             // 现有笔记读不出：回列表，别在空白页误存覆盖
             finish()
@@ -152,6 +158,7 @@ class EditActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        AppLog.d("Edit", "onResume ready=${state.ready} editing=${state.editing}")
         // 从设置页改完全局字号/字体/主题回来，这里立即生效
         editor.applyTheme()
         // v1.57：从设置页改完工具栏自定义回来，配置变化则重建工具栏生效
@@ -170,6 +177,7 @@ class EditActivity : AppCompatActivity() {
     /** 离开页面就保存，不用手动点保存 */
     override fun onPause() {
         ime.stopPolling()   // 页面不可见，停轮询
+        AppLog.d("Edit", "onPause dirty=${state.dirty} deleted=$deleted ready=${state.ready}")
         if (!deleted && state.dirty) {   // Sprint 4 #64：只有脏了才落盘，统一返回/后台/重建判断
             save()
             // 双保险：JS 侧编辑中的块在 visibilitychange 已即时上报；
@@ -192,6 +200,7 @@ class EditActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        AppLog.d("Edit", "onDestroy")
         ime.stopPolling()
         // WebView 脱离窗口树再销毁，避免持有 Activity 泄漏
         binding.editorWeb.destroy()
@@ -220,15 +229,34 @@ class EditActivity : AppCompatActivity() {
         }
         wv.addJavascriptInterface(EditorBridge(this), "Android")
 
+        // v1.104：把 WebView(编辑器内核 ProseMirror) 的 console 桥接到原生日志，
+        // 真机排查编辑器内部行为时也能在 logcat/日志文件里看到 JS 侧输出。
+        wv.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(m: ConsoleMessage): Boolean {
+                val lvl = when (m.messageLevel()) {
+                    ConsoleMessage.MessageLevel.DEBUG -> Log.DEBUG
+                    ConsoleMessage.MessageLevel.LOG -> Log.INFO
+                    ConsoleMessage.MessageLevel.WARNING -> Log.WARN
+                    ConsoleMessage.MessageLevel.ERROR -> Log.ERROR
+                    else -> Log.DEBUG
+                }
+                val src = m.sourceId()?.takeIf { it.isNotBlank() }?.let { " (${it}:${m.lineNumber()})" } ?: ""
+                AppLog.js(lvl, m.message() + src)
+                return true   // 已自行处理，阻止默认重复打印
+            }
+        }
+
         wv.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String?) {
                 val first = !state.ready
                 state.ready = true
+                AppLog.i("Edit", "onPageFinished first=$first url=$url")
                 if (first) {
                     // v1.57：先注入工具栏自定义配置，再 loadMarkdown —— mount 时
                     // buildToolbar 直接读全局配置，避免首屏用默认后又重建一次
                     editor.pushToolbarConfig()
                     editor.load(state.content)
+                    AppLog.d("Edit", "first load contentLen=${state.content.length}")
                     editor.applyTheme()
                 }
                 // v1.51 修"工具栏时有时无"：推送"实时"键盘态并把边沿缓存对齐到
@@ -275,7 +303,7 @@ class EditActivity : AppCompatActivity() {
         // 打开设置里的开关即可；点浮窗一键分享日志（v1.66）。
         binding.debugOverlay.visibility =
             if (DebugPref.enabled(this)) View.VISIBLE else View.GONE
-        binding.debugOverlay.setOnClickListener { diag.shareInsetLog() }
+        binding.debugOverlay.setOnClickListener { AppLog.share(this) }
     }
 
     /**
@@ -297,6 +325,9 @@ class EditActivity : AppCompatActivity() {
 
     // ---------- JS 事件路由（EditorBridge post 回主线程后调用） ----------
 
+    /** 上一次轮询到的光标位置（边沿检测光标是否被重置到开头，配合 JS 侧 [caret] 打点） */
+    private var prevCaret = -1
+
     /**
      * JS 上报全文 + 光标：更新状态镜像（v1.103 撤销快照栈退役，
      * PM history 全权接管撤销粒度，这里只负责内容真源镜像）。
@@ -304,6 +335,12 @@ class EditActivity : AppCompatActivity() {
     fun onJsContentChanged(text: String, caret: Int) {
         state.content = text
         state.caret = caret
+        // 光标从「非开头」突然跳到「开头(<=1)」且文档不空：疑似 selection 被重置，
+        // 打点便于下次日志定位触发源（配合 JS 侧 [caret] loadMarkdown/enterEditAt 打点）
+        if (prevCaret > 1 && caret <= 1 && text.length > 20) {
+            AppLog.w("Edit", "caret jumped to start: prev=$prevCaret now=$caret len=${text.length}")
+        }
+        prevCaret = caret
     }
 
     /** PM history 栈深度 → 顶栏撤回/前进按钮点亮（EditorController 轮询回调） */
@@ -317,6 +354,9 @@ class EditActivity : AppCompatActivity() {
         state.editing = editing
         if (editing) {
             state.editingSince = SystemClock.elapsedRealtime()
+            // v1.110：进编辑态瞬间记录 Kotlin 侧光标镜像，与 JS [caret] 打点对照，
+            // 不依赖 JS console 落盘，确保「进编辑即跳开头」这类问题必有可靠日志。
+            AppLog.i("Edit", "enterEditMode caret=${state.caret} (kotlin mirror, pre-edit)")
             // 统一 IME 补刀（v1.35.10）：点击进入编辑时，JS 的 el.focus() 不在
             // 用户手势栈内，经常唤不起软键盘 → 辅助栏不出、也打不了字。
             // 延迟 200ms：先等 WebView 的原生唤起，已弹起就不重复请求。
@@ -383,7 +423,7 @@ class EditActivity : AppCompatActivity() {
 
     private fun save() {
         val content = state.content
-        if (content.isBlank()) return   // 空便签不存
+        if (content.isBlank()) { AppLog.d("Edit", "save skip: blank"); return }   // 空便签不存
 
         // 正文里不再引用的图直接丢掉，别让删了图的旧数据一直占着 json
         image.retainImagesReferencedBy(content)
@@ -410,7 +450,9 @@ class EditActivity : AppCompatActivity() {
         )
         try {
             NoteRepository.upsert(this, note)
+            AppLog.i("Edit", "save ok id=${note.id} title=${note.title} len=${content.length}")
         } catch (e: CorruptStorageException) {
+            AppLog.e("Edit", "save failed: corrupt storage", e)
             toast("保存失败：数据文件损坏，已恢复上次备份")
             return
         }
@@ -438,9 +480,11 @@ class EditActivity : AppCompatActivity() {
 
     private fun doDelete() {
         deleted = true   // 必须先置位：finish() 触发的 onPause 不能再回写内容
+        AppLog.i("Edit", "doDelete id=$noteId")
         try {
             NoteRepository.softDelete(this, noteId)
         } catch (e: CorruptStorageException) {
+            AppLog.e("Edit", "delete failed: corrupt storage", e)
             toast("删除失败：数据文件损坏，已恢复上次备份")
             finish()
             return

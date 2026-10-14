@@ -61,6 +61,7 @@ object WebDav {
             .method("MKCOL", null)
             .build()
         client.newCall(req).execute().use { r ->
+            AppLog.d("WebDav", "MKCOL $dir -> ${r.code}")
             if (r.isSuccessful || r.code == 405) return
             throw IOException("建目录失败 HTTP ${r.code}")
         }
@@ -77,11 +78,14 @@ object WebDav {
             .get()
             .build()
         client.newCall(req).execute().use { r ->
-            return when {
+            val code = r.code
+            val result = when {
                 r.isSuccessful -> r.body?.string() to r.header("ETag")
                 r.code == 404 -> null to null
                 else -> throw IOException("下载失败 HTTP ${r.code}")
             }
+            AppLog.d("WebDav", "GET $url -> $code")
+            return result
         }
     }
 
@@ -95,6 +99,9 @@ object WebDav {
             .header("Authorization", auth(user, pwd))
             .put(text.toRequestBody("application/json; charset=utf-8".toMediaType()))
         if (!ifMatch.isNullOrBlank()) builder.header("If-Match", ifMatch)
-        client.newCall(builder.build()).execute().use { r -> return r.code }
+        client.newCall(builder.build()).execute().use { r ->
+            AppLog.d("WebDav", "PUT $url ifMatch=${ifMatch ?: "-"} -> ${r.code}")
+            return r.code
+        }
     }
 }

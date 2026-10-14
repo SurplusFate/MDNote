@@ -58,7 +58,7 @@ object NoteRepository {
         return runCatching {
             gson.fromJson<MutableList<Note>>(f.readText(), listType)
                 ?: throw IOException("notes.json 反序列化为 null")
-        }.onSuccess { cachedNotes = ArrayList(it) }
+        }.onSuccess { cachedNotes = ArrayList(it); AppLog.d("Repo", "loadAll ok count=${it.size}") }
     }
 
     /**
@@ -69,6 +69,7 @@ object NoteRepository {
      */
     fun loadAll(ctx: Context): MutableList<Note> {
         return loadAllResult(ctx).getOrElse { e ->
+            AppLog.e("Repo", "loadAll corrupt, backup + fallback", e)
             backupCorrupt(ctx)
             cachedNotes?.let { return ArrayList(it) }
             throw CorruptStorageException("notes.json 解析失败且无可用缓存，已备份为 .corrupt", e)
@@ -89,6 +90,7 @@ object NoteRepository {
      *  @Synchronized 保证 storeRevision 推进与缓存写入的原子性，避免 IO/主线程并发写竞态 */
     @Synchronized
     fun saveAll(ctx: Context, list: List<Note>) {
+        val t0 = System.currentTimeMillis()
         val dev = deviceId(ctx)
         storeRevision++
         val stamped = list.map { n ->
@@ -106,6 +108,7 @@ object NoteRepository {
             f.writeText(json)
         }
         cachedNotes = ArrayList(stamped)
+        AppLog.d("Repo", "saveAll count=${stamped.size} rev=$storeRevision took=${System.currentTimeMillis() - t0}ms")
     }
 
     /** 列表页要的数据：没删的，置顶的排在最前，其余按更新时间倒序 */
@@ -119,15 +122,17 @@ object NoteRepository {
         val all = loadAll(ctx)
         all.removeAll { it.id == note.id }
         all.add(note)
+        AppLog.d("Repo", "upsert id=${note.id} title=${note.title} total=${all.size}")
         saveAll(ctx, all)
     }
 
     /** 软删除：打墓碑，不真删 */
     fun softDelete(ctx: Context, id: Long) {
         val all = loadAll(ctx)
-        val n = all.find { it.id == id } ?: return
+        val n = all.find { it.id == id } ?: run { AppLog.d("Repo", "softDelete noop id=$id"); return }
         n.deleted = true
         n.updatedAt = System.currentTimeMillis()
+        AppLog.d("Repo", "softDelete id=$id")
         saveAll(ctx, all)
     }
 
@@ -146,6 +151,7 @@ object NoteRepository {
             }
         }
         if (n > 0) saveAll(ctx, all)
+        AppLog.d("Repo", "softDeleteBatch requested=${ids.size} removed=$n")
         return n
     }
 
@@ -155,6 +161,7 @@ object NoteRepository {
         val n = all.find { it.id == id } ?: return false
         n.pinned = !n.pinned
         // 置顶是独立标记，不改动 updatedAt，免得把便签顺带挤到时间序顶端
+        AppLog.d("Repo", "togglePin id=$id -> ${n.pinned}")
         saveAll(ctx, all)
         return n.pinned
     }
@@ -172,6 +179,7 @@ object NoteRepository {
             }
         }
         if (n > 0) saveAll(ctx, all)
+        AppLog.d("Repo", "setPinned requested=${ids.size} changed=$n pinned=$pinned")
         return n
     }
 
@@ -193,6 +201,7 @@ object NoteRepository {
             }
             .filter { !it.deleted || it.updatedAt > cutoff }
             .sortedByDescending { it.updatedAt }
+            .also { AppLog.d("Repo", "merge local=${local.size} remote=${remote.size} -> ${it.size}") }
     }
 
     /** 一次完整同步。内部已切到 IO 线程，外面直接调就行 */
@@ -201,8 +210,10 @@ object NoteRepository {
             val url = Config.url(ctx)
             val user = Config.user(ctx)
             val pwd = Config.pwd(ctx)
+            AppLog.i("Repo", "sync start url=$url")
 
             val (remoteJson, remoteETag) = WebDav.downloadWithMeta(url, user, pwd)
+            AppLog.d("Repo", "sync download remoteLen=${remoteJson?.length} etag=$remoteETag")
             val remote: List<Note> = if (remoteJson.isNullOrBlank()) {
                 emptyList()
             } else {
@@ -210,6 +221,7 @@ object NoteRepository {
             }
 
             val merged = merge(loadAll(ctx), remote)
+            AppLog.d("Repo", "sync merged=${merged.size}")
             saveAll(ctx, merged)
 
             // 冲突保护：上传带 If-Match，远端已变(412)则重新下载/合并/再传，最多重试若干次
@@ -218,8 +230,9 @@ object NoteRepository {
             val maxAttempts = 5
             while (true) {
                 val code = WebDav.upload(url, user, pwd, gson.toJson(merged), ifMatch = etag)
-                if (code in 200..299) break
+                if (code in 200..299) { AppLog.d("Repo", "sync upload ok etag=$etag"); break }
                 if (code == 412 && attempt < maxAttempts) {
+                    AppLog.w("Repo", "sync 412 conflict, retry attempt=${attempt + 1}")
                     attempt++
                     val (r2, e2) = WebDav.downloadWithMeta(url, user, pwd)
                     val remote2: List<Note> = if (r2.isNullOrBlank()) emptyList()
@@ -229,7 +242,7 @@ object NoteRepository {
                     etag = e2
                     continue
                 }
-                if (code !in 200..299) throw IOException("上传失败 HTTP $code")
+                if (code !in 200..299) { AppLog.e("Repo", "sync upload failed HTTP $code"); throw IOException("上传失败 HTTP $code") }
             }
             loadAll(ctx)
         }

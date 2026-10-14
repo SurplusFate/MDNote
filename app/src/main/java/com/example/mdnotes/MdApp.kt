@@ -10,6 +10,7 @@ import androidx.appcompat.app.AppCompatDelegate
 class MdApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        AppLog.init(this)
         AppCompatDelegate.setDefaultNightMode(Appearance.themeMode(this))
     }
 }

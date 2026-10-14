@@ -37,7 +37,7 @@ class EditorDiagnostics(private val a: EditActivity) {
             insetLogBuf.addLast(line)
             while (insetLogBuf.size > 400) insetLogBuf.removeFirst()
         }
-        Log.d("MdNotesInset", line.trimEnd())
+        AppLog.d("Inset", line.trimEnd())
         try {
             val f = insetLogFile
             if (!f.exists()) f.createNewFile()
@@ -121,7 +121,7 @@ class EditorDiagnostics(private val a: EditActivity) {
                 append(" id=[").append(id).append(']')
                 if (id != lastIndentDiag) {
                     lastIndentDiag = id
-                    Log.d("MdNotesIndent", "indentDiag=$id")
+                    AppLog.d("Indent", "indentDiag=$id")
                 }
             }
         }

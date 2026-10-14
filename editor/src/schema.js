@@ -70,12 +70,16 @@ export const mdnotesSchema = new Schema({
       defining: true,
       attrs: { checked: { default: null } },
       parseDOM: [{ tag: 'li' }],
+      // 注意：内容孔 0 必须是其所在元素的唯一子节点（PM 硬性约束）。
+      // 任务项把勾选框 span 与内容孔 0 并列会导致渲染抛
+      // "Content hole must be the only child of its parent node"、整页空白。
+      // 因此勾选框与正文分别包进独立元素，0 独占 .md-task-body。
       toDOM: (node) => {
         if (node.attrs.checked === null || node.attrs.checked === undefined) return ['li', 0];
         return ['li', {
           class: 'md-task' + (node.attrs.checked ? ' md-task--on' : ''),
           'data-checked': String(node.attrs.checked),
-        }, ['span', { class: 'md-task-box', contenteditable: 'false' }], 0];
+        }, ['span', { class: 'md-task-box', contenteditable: 'false' }], ['span', { class: 'md-task-body' }, 0]];
       },
     },
 
@@ -169,6 +173,39 @@ export const mdnotesSchema = new Schema({
       selectable: false,
       parseDOM: [{ tag: 'br' }],
       toDOM: () => ['br'],
+    },
+
+    // 行内公式 $...$（atom；视觉由 bridge 的 math NodeView 用 KaTeX 渲染）
+    math_inline: {
+      group: 'inline',
+      inline: true,
+      atom: true,
+      attrs: { latex: { default: '' } },
+      parseDOM: [{
+        tag: 'span[data-md-math-inline]',
+        getAttrs: (dom) => ({ latex: dom.getAttribute('data-latex') || '' }),
+      }],
+      toDOM: (node) => ['span', {
+        'data-md-math-inline': '1',
+        'data-latex': node.attrs.latex,
+        class: 'md-math-inline',
+      }],
+    },
+
+    // 块级公式 $$...$$（atom；视觉由 KaTeX 渲染）
+    math_block: {
+      group: 'block',
+      atom: true,
+      attrs: { latex: { default: '' } },
+      parseDOM: [{
+        tag: 'div[data-md-math-block]',
+        getAttrs: (dom) => ({ latex: dom.getAttribute('data-latex') || '' }),
+      }],
+      toDOM: (node) => ['div', {
+        'data-md-math-block': '1',
+        'data-latex': node.attrs.latex,
+        class: 'md-math-block',
+      }],
     },
 
     text: { group: 'inline' },

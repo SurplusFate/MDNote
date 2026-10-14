@@ -4,6 +4,7 @@
 import { build } from 'esbuild';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { cpSync, mkdirSync, rmSync, existsSync } from 'fs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const out = process.argv[2] ||
@@ -28,3 +29,29 @@ for (const f of files) {
   const bytes = result.metafile.outputs[f].bytes;
   console.log('OUT', f, (bytes / 1024).toFixed(1) + 'KB');
 }
+
+// ---- 拷贝 KaTeX 离线资产（CSS + 字体）到 assets/editor/katex，供 WebView 直接取用 ----
+// katex 可能装在 editor/node_modules 或上层 node_modules（mono 安装），向上查找。
+function findKatexDist() {
+  let dir = here;
+  for (let i = 0; i < 6; i++) {
+    const cand = join(dir, 'node_modules', 'katex', 'dist');
+    if (existsSync(cand)) return cand;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+const katexDist = findKatexDist();
+if (katexDist) {
+  const dest = join(here, '..', 'app', 'src', 'main', 'assets', 'editor', 'katex');
+  rmSync(dest, { recursive: true, force: true });
+  mkdirSync(join(dest, 'fonts'), { recursive: true });
+  cpSync(join(katexDist, 'katex.min.css'), join(dest, 'katex.min.css'));
+  cpSync(join(katexDist, 'fonts'), join(dest, 'fonts'), { recursive: true });
+  console.log('OUT katex assets ->', dest);
+} else {
+  console.warn('WARN: katex dist not found, skip offline fonts');
+}
+

@@ -25,6 +25,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLog.i("Main", "onCreate")
         // 首次启动写入内置示例便签（功能展示），之后靠 SharedPreferences 标记不再重复
         Seed.ensure(this)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -103,6 +104,7 @@ class MainActivity : AppCompatActivity() {
             emptyList()
         }
         adapter.submit(list)
+        AppLog.d("Main", "refresh kw='$kw' size=${list.size}")
         binding.emptyTip.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
     }
 
@@ -160,6 +162,7 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.action_cancel, null)
             .setPositiveButton(R.string.action_delete) { _, _ ->
                 val n = NoteRepository.softDelete(this, ids)
+                AppLog.d("Main", "deleteSelected ids=${ids.size} n=$n")
                 exitSelectionMode()
                 refresh()
                 toast(getString(R.string.deleted_count, n))
@@ -168,11 +171,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openEdit(id: Long) {
+        AppLog.d("Main", "openEdit id=$id")
         startActivity(Intent(this, EditActivity::class.java).putExtra(EditActivity.EXTRA_ID, id))
     }
 
     /** 单条便签切换置顶（卡片图钉触发）：即时落盘刷新，不弹 toast，靠图标变色反馈 */
     private fun togglePin(note: Note) {
+        AppLog.d("Main", "togglePin id=${note.id}")
         NoteRepository.togglePin(this, note.id)
         refresh()
     }
@@ -196,15 +201,17 @@ class MainActivity : AppCompatActivity() {
             toast("先在右上角菜单 → 设置里填好 WebDAV")
             return
         }
+        AppLog.i("Main", "doSync start")
         val item = binding.toolbar.menu.findItem(R.id.action_sync)
         item.title = "同步中…"
         lifecycleScope.launch {
             NoteRepository.sync(this@MainActivity)
                 .onSuccess {
+                    AppLog.i("Main", "doSync done count=${it.count { !it.deleted }}")
                     refresh()
                     toast("已同步，共 ${it.count { !it.deleted }} 条")
                 }
-                .onFailure { toast("同步失败：${it.message}") }
+                .onFailure { AppLog.e("Main", "doSync fail: ${it.message}"); toast("同步失败：${it.message}") }
             item.title = getString(R.string.action_sync)
         }
     }

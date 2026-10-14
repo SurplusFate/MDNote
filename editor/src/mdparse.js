@@ -65,9 +65,9 @@ export function createParser(schema) {
   const md = new MarkdownIt({ html: true, linkify: false, breaks: false });
   md.core.ruler.push('mdnotes_tasklist', tasklistRule);
 
-  // 块级公式 $$...$$：内核无 math 渲染（R6 已知边界），但必须原样透传——
-  // 否则 commonmark 会把 "=\n" 行当 setext heading 下划线，重组并吞掉公式内容
-  // （seed 数学笔记实证：'$$\n...\n=\n...' → '# $$'，内容丢失，违反 P1）。
+  // 块级公式 $$...$$：识别为专属块（防止 commonmark 把 "=\n" 行当 setext
+  // heading 下划线吞掉公式内容），剥离 $$ 后存为 math_block 节点，
+  // 由 bridge 的 math NodeView 用 KaTeX 渲染。
   function mathBlockRule(state, startLine, endLine, silent) {
     const startPos = state.bMarks[startLine] + state.tShift[startLine];
     const startMax = state.eMarks[startLine];
@@ -102,6 +102,34 @@ export function createParser(schema) {
     return true;
   }
   md.block.ruler.before('fence', 'mdnotes_math_block', mathBlockRule);
+
+  // 行内公式 $...$（非 $$）：inline ruler。行级 $$ 已在 mathBlockRule 消费，
+  // 不会流到此处；段落内的 $...$ 在此识别。
+  function inlineMathRule(state, silent) {
+    const src = state.src;
+    const pos = state.pos;
+    if (src.charCodeAt(pos) !== 0x24 /* $ */) return false;
+    if (src.charCodeAt(pos + 1) === 0x24) return false; // 让位块级 $$
+    const start = pos + 1;
+    let end = start;
+    while (end < state.posMax) {
+      const c = src.charCodeAt(end);
+      if (c === 0x5c /* \ */) { end += 2; continue; } // 跳过转义字符
+      if (c === 0x24) break; // 找到闭合 $
+      end++;
+    }
+    if (end >= state.posMax) return false;
+    const content = src.slice(start, end);
+    if (!content || /^\s|\s$/.test(content)) return false; // 禁止首尾空白（避免吃货币符号）
+    if (!silent) {
+      const tok = state.push('mdnotes_math_inline', '', 0);
+      tok.content = content;
+      tok.markup = '$';
+    }
+    state.pos = end + 1;
+    return true;
+  }
+  md.inline.ruler.before('escape', 'mdnotes_math_inline', inlineMathRule);
 
   let srcLines = [];
 
@@ -178,11 +206,22 @@ export function createParser(schema) {
   // 行内 HTML 原文进文本流（序列化时会转义，已知边界）
   parser.tokenHandlers.html_inline = (state, tok) => state.addText(tok.content);
 
-  // 数学块：原子 raw_block 原样透传。注意必须走显式 addNode（content 空）——
-  // 若配成 noCloseToken block spec，PM 内部 handler 会 addText 进节点内容，
-  // atom 节点 createAndFill 失败返回 null，整个块静默消失。
+  // 数学块：$$...$$ → math_block 节点（atom），latex 由 KaTeX 在 NodeView 渲染。
+  // 必须走显式 addNode（atom 无 content）—— 若配成 block spec，PM 会 addText 进节点，
+  // atom 节点 createAndFill 失败返回 null，整块静默消失。
+  // 剥掉首尾的 $$ 标记与多余空白，得到纯 latex。
+  function stripMathFence(s) {
+    return stripTrailingNewlines(s || '')
+      .replace(/^\s*\$\$?\s*/, '')
+      .replace(/\s*\$\$?\s*$/, '');
+  }
   parser.tokenHandlers.mdnotes_math_block = (state, tok) => {
-    state.addNode(schema.nodes.raw_block, { raw: stripTrailingNewlines(tok.content) });
+    state.addNode(schema.nodes.math_block, { latex: stripMathFence(tok.content) });
+  };
+
+  // 行内公式 $...$ → math_inline 节点（atom）
+  parser.tokenHandlers.mdnotes_math_inline = (state, tok) => {
+    state.addNode(schema.nodes.math_inline, { latex: tok.content });
   };
 
   // 包装 tokenizer：记录源码行（table 原样提取用）

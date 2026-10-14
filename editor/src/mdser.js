@@ -80,6 +80,15 @@ export function createSerializer(schema) {
         state.closeBlock(node);
       },
 
+      // 公式：块级 $$...$$ / 行内 $...$，往返稳定
+      math_block(state, node) {
+        state.write('$$\n' + (node.attrs.latex || '') + '\n$$');
+        state.closeBlock(node);
+      },
+      math_inline(state, node) {
+        state.write('$' + (node.attrs.latex || '') + '$');
+      },
+
       image(state, node) {
         // src 是 img:// 或普通 URL，括号转义防炸结构
         const src = String(node.attrs.src || '').replace(/[()]/g, '\\$&');
